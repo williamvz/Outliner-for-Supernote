@@ -378,8 +378,8 @@ POST /sync
 
 ## 8. Rules for writing into Tana
 
-- **Where:** the day node of the **page's date**, directly as nodes. This is
-  open decision 2: alternatives are a parent node or a #memo.
+- **Where:** the day node of the **page's date**, directly as nodes, with no
+  wrapper node or #memo (decision 5).
 - **Language:** everything written to Tana is **English**, as in the original
   brief. Handwriting in Dutch is translated, and the paper keeps your original.
 - **New tasks** follow your #task rules:
@@ -435,10 +435,10 @@ Deploying the Worker is a manual `wrangler deploy`.
 | 1 | Plugin, not a standalone app | **Decided** (you, 2026-10-29) |
 | 2 | Offline first | **Decided** (you) |
 | 3 | Tasks and writing on one page, plus a Sync button | **Decided** (you) |
-| 4 | Notebook structure: one per month, a page per day | Open: my recommendation |
-| 5 | Where writing lands: directly on the day node | Open: my recommendation |
-| 6 | "Today" list rule (§6.2) | Open: my recommendation |
-| 7 | Recurring tasks: show them, and emulate Complete and reschedule | Open: my recommendation |
+| 4 | Notebook structure: one per month, a page per day | **Decided** (you, 2026-10-29) |
+| 5 | Where writing lands: directly on the day node | **Decided** (you) |
+| 6 | "Today" list rule (§6.2) | **Decided** (you) |
+| 7 | Recurring tasks: show them, and emulate Complete and reschedule | **Decided** (you) |
 | 8 | Everything in Tana is English | Assumed from the original brief |
 
 ---
