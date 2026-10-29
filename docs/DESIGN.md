@@ -426,6 +426,19 @@ Deploying the Worker is a manual `wrangler deploy`.
 | 8 | Can our Worker **complete Tana's OAuth** as a non-Claude client, and how long do refresh tokens live? | Re-link from a phone when needed. The plugin shows "Re-link Tana". |
 | 9 | Does the CI build of `.snplg` on Linux install and run on the device? | Build on a macOS runner. |
 
+Partial answers from before the device test (2026-10-29):
+
+- **Q8:** Tana publishes OAuth metadata with dynamic client registration,
+  PKCE (S256), public clients and the refresh_token grant. A local run of the
+  Worker registered itself and got a valid authorize redirect. Refresh-token
+  lifetime is still unknown.
+- **Q9:** `buildPlugin.sh` builds the `.snplg` on Linux as a pure JS bundle.
+  `@react-native-async-storage` is not compiled in, because the script treats
+  `@react-native*` packages as provided by the host. Whether the host really
+  provides it is Q6.
+- **Q7 (partly):** the hosted `import_tana_paste` accepts an `idempotencyKey`,
+  so a retried sync can't create duplicate nodes.
+
 ---
 
 ## 11. Decisions
