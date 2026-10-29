@@ -1,402 +1,462 @@
-# Design sketch: Nomad pen + Tana companion
+# Design: Supernote ⇄ Tana Outliner
 
-Status: **sketch for discussion**, 2026-10-27. Nothing is built yet.
+Status: **design v2 for discussion**, 2026-10-29. Nothing is built yet.
+v1 of this doc (a sideloaded app with a separate canvas) is superseded: the
+plugin route is confirmed.
 
 ## TL;DR
 
-- **Build a Supernote plugin, not a standalone APK.** Supernote now ships an
-  official plugin SDK for Manta/Nomad (`sn-plugin-lib`, React Native 0.79.2).
-  A plugin:
-  - puts buttons in the *native* Notes toolbar and lasso toolbar,
-  - opens a full-screen panel,
-  - reads lasso-selected handwriting and runs the device's own handwriting
-    recognition on it,
-  - exports the selection as a PNG,
-  - makes network requests once you grant it permission.
+**One "Today page" per day** in a Supernote notebook. A plugin draws your
+tasks from Tana at the top; below them you write freely. A **Sync** button,
+plus optional quiet auto-sync, closes the loop:
 
-  You keep writing with Supernote's own pen and ink engine, so the brief's
-  biggest unknown ("is our own canvas fast enough on e-ink?") goes away.
-- **The backend stays as briefed.** A Cloudflare Worker holds every secret. It
-  talks to Tana through the hosted MCP server (`app.tana.inc/mcp`, which uses
-  OAuth) and to Claude for vision and translation.
-- **Milestone 1 becomes a half-day feasibility spike** instead of a
-  pen-latency spike. GitHub Actions builds a "hello" plugin, you install it on
-  the Nomad, and it proves recognition, PNG export and network access.
-- **The brief's native-APK plan stays as the fallback.** Sideloading has
-  existed since firmware 3.16.27. The cloud-folder OCR plan is the fallback
-  after that.
+- **Ticking a box** (or striking a task through) with the pen marks that task
+  done in Tana.
+- **Writing in the lower half**, using dashes and indentation like an outline,
+  becomes nodes on *that day's* page in Tana, with the same hierarchy.
+- A **Tasks panel**, one tap from the toolbar, lets you browse all tasks with
+  filters (P1–P4, Home/Work, Today/Week/All) and Prev/Next paging. You can
+  complete tasks there, or send the current list to the page.
+- **Everything works offline.** Ticks and writing are kept on the device and
+  sent when Wi-Fi is back. The page's date decides which Tana day node the
+  writing goes to, not the time of syncing.
+
+The plugin SDK supports all of these. The remaining unknowns are listed in
+§10 and are cheap to test in a one-to-two-day spike.
 
 ---
 
-## 1. What changed since the brief
+## 1. The Today page
 
-| Brief assumption | What I found |
+Nomad page: 1404 × 1872 px at 300 ppi, so 1 mm ≈ 11.8 px. We read the exact
+size at runtime with `getPageSize`.
+
+```
+┌────────────────────────────────────────────────────────────┐
+│ Thu 29 Oct          Today · All · 1/3          Synced 07:42│ ← header (plugin text)
+├────────────────────────────────────────────────────────────┤
+│ ☐  Send budget proposal to finance        P1 · Work · today│
+│ ☑  Review landing page copy               P2 · Work · −3d  │ ← your tick = done
+│ ☐  Book dentist appointment            ↻  P3 · Home · today│ ← ↻ recurring
+│ ☐  Ask Ron for the Q4 numbers             P2 · Work · today│
+│ ☐  _______________________ (empty row: write a new task)   │
+│ ☐  _______________________                                 │
+├════════════════════════════════════════════════════════════┤
+│ ┊    ┊    ┊    ┊      (faint indent guides, from template) │
+│ Q4 planning                                             ✓  │ ← ✓ = in Tana
+│ ┊ – hire a second designer                              ✓  │
+│ ┊ ┊ – check the budget with finance                        │ ← not yet synced
+│ ☐ call the plumber about the boiler                        │ ← box = new #task
+│ ___________________________________________________________│
+│ ___________________________________________________________│
+└────────────────────────────────────────────────────────────┘
+```
+
+Each part of the page has an owner:
+
+| Part | Owner | What it is |
+| --- | --- | --- |
+| Checkbox squares, row lines, divider, ruled lines, indent guides | **Template** (a background image we ship) | Never changes, can't be erased, costs nothing to render. |
+| Header, task names, meta (priority, Home/Work, due), ✓ sync marks | **Plugin** | Text boxes on the page, set to non-editable. |
+| Ticks, strike-throughs, writing | **You** | Normal pen strokes, read by the plugin when it syncs. |
+
+### Proposed sizes
+
+| Zone | Size |
 | --- | --- |
-| Custom code means a sideloaded APK with its own drawing canvas, and pen feel is the big unknown. | Supernote has an official **plugin system**. NOTE and DOC load plugins through a "PluginHost" service, plugins register toolbar and lasso-toolbar buttons, and you install a `.snplg` package via *Settings → Apps → Plugins*. Writing happens in the native NOTE app. One review called third-party APKs "laggy with the stylus". |
-| Unknown whether Supernote exposes a fast-ink or refresh hook. | I found no public fast-ink or refresh API for APKs. The plugin route makes the question irrelevant. |
-| OCR goes to a vision model. | The plugin SDK has `recognizeElements(strokes) → text`, which uses the device's own recognizer, and `generateLassoPreview(path) → PNG`. We can send both and let the model use the device OCR as a draft. |
-| Tana access: hosted MCP or Input API, to verify. | **Hosted MCP**: OAuth only, works without the desktop app, needs a paid plan, still in beta. Its tools include `search_nodes`, `read_node`, `check_node`, `uncheck_node`, `import_tana_paste`, `get_or_create_calendar_node`, `set_field_content` and `edit_node`. The **local MCP** needs the desktop app running, so a Worker can't use it. The **Input API** is write-only, so it can't read tasks. **Decision: hosted MCP.** |
+| Header | ~130 px |
+| Task zone | 6 rows × 110 px (≈ 9.3 mm each, a comfortable target for a tick) |
+| Writing zone | ~10 ruled lines × 93 px (≈ 8 mm, like Supernote's lined templates) |
+| Indent guides | every 80 px (≈ 7 mm) |
+
+On more writing:
+- When you need more space, add a page normally. A page without a task zone
+  counts as a **continuation** of the day before it and gets a small
+  "Thu 29 Oct (cont.)" header.
 
 ---
 
-## 2. Architecture
+## 2. A day with it
 
-```
- Supernote Nomad (Chauvet, Android 11 based)
-┌───────────────────────────────────────────────────────────────┐
-│  NOTE app: native pen, native ink, native refresh             │
-│    toolbar:  [Today]              lasso toolbar:  [→ Tana]    │
-│        │ (AIDL button events)                                 │
-│  PluginHost (React Native 0.79 runtime)                       │
-│    "Tana" plugin                                              │
-│      TaskPanel · SendPanel · ConfigPanel                      │
-│      plugin private dir: config.json, tasks.json, outbox/     │
-└───────────────┬───────────────────────────────────────────────┘
-                │ HTTPS, Authorization: Bearer <device passphrase>
-                │ (only when Wi-Fi is on; otherwise the outbox waits)
-┌───────────────▼───────────────────────────────────────────────┐
-│  Cloudflare Worker  (TypeScript)                              │
-│    GET  /tasks     POST /done     POST /note                  │
-│    KV: idempotency (opId → result)                            │
-│    Durable Object "TanaSession": OAuth tokens + MCP client    │
-│    secrets: DEVICE_TOKEN_HASH, ANTHROPIC_API_KEY              │
-└───────┬──────────────────────────────────────┬────────────────┘
-        │ MCP over Streamable HTTP (OAuth)     │ Messages API (image + text)
-        ▼                                      ▼
-   app.tana.inc/mcp                       Claude (vision)
-```
-
-### 2.1 Plugin (`plugin/`)
-
-- **Project:** generated from `@supernote-plugin/sn-plugin-template` and
-  pinned to RN 0.79.2, which the host requires. `PluginConfig.json` holds a
-  `pluginID` generated on the first build. We commit it and never change it.
-- **Entry points:**
-  - Toolbar button **Today** (NOTE) → TaskPanel.
-  - Lasso toolbar button **→ Tana** (NOTE, `editDataTypes: [0]`, which means
-    handwritten strokes) → SendPanel for the selection.
-  - Config button → ConfigPanel, where you enter the Worker URL and the device
-    passphrase.
-  - *Later:* toolbar button **Page → Tana** to send the whole page.
-- **Local state** lives in the plugin's private directory, the only path that
-  needs no permission:
-  - `config.json`
-  - `tasks.json`: the last fetched top 5 plus local strike state
-  - `outbox/*.json` and `outbox/*.png`: queued operations
-- **Permissions:**
-  - `plugin.permission.INTERNET` only. Choose **"Always allow"**: "Allow
-    this time only" expires every session.
-  - We avoid `FILE:READ` and `FILE:WRITE` by writing PNGs into the private
-    directory. M0 verifies that `generateLassoPreview` accepts that path.
-- **No secrets in the package.** The `.snplg` built in CI contains no token.
-  You type the passphrase once in ConfigPanel. Four random words are easier to
-  type on the e-ink keyboard than a hex string, and still strong enough when
-  the Worker rate-limits failed attempts.
-
-### 2.2 Worker (`worker/`)
-
-- **Auth:** constant-time compare of `sha256(bearer)` with `DEVICE_TOKEN_HASH`.
-  Everything else gets a 401.
-- **Idempotency:** every write carries a client-generated `opId` (UUID). The
-  Worker stores `opId → result` in KV for 7 days, so a replayed outbox never
-  double-checks or double-creates.
-- **TanaSession Durable Object:** owns the OAuth tokens. It refreshes them and
-  runs MCP calls one at a time, so two concurrent requests never race a token
-  refresh.
-  - One-time setup: open `/oauth/start` in a phone browser, approve in Tana,
-    and `/oauth/callback` stores the tokens. This uses standard MCP OAuth
-    (dynamic client registration + PKCE).
-  - Cloudflare's Agents SDK has built-in support for OAuth-protected remote MCP
-    servers, which is likely the shortest path (verify in M0b). The fallback is
-    `@modelcontextprotocol/sdk` with our own token store.
-- **Claude** is used only in `/note`. Task reads and writes are plain,
-  deterministic MCP calls with no LLM in the loop.
-- **"Today"** is computed in `Europe/Amsterdam`. The plugin also sends its local
-  date, which wins if it differs (travel).
+1. **Morning.** Open the *Tana* notebook and tap **Today** in the toolbar.
+   - If today's page doesn't exist yet, the plugin adds it at the end and fills
+     in the header and tasks.
+   - It uses the cached list right away, then refreshes when online.
+2. **During the day**, tick a box or strike a task through. Nothing else
+   happens on screen: the ink is the feedback, like paper.
+3. **Write** in the lower half: thoughts, meeting notes, or a ☐ line for a new
+   task. Writing in an **empty task row** also creates a task.
+4. **Sync.** Tap **Sync** in the toolbar, or let auto-sync run after a minute
+   of pen inactivity. The plugin then:
+   - sends completions and new lines to Tana,
+   - puts a small gray ✓ next to each line now in Tana,
+   - updates the header ("Synced 10:14" or "Offline · 3 waiting").
+5. **Browse.** Tap **Tasks** in the toolbar for the full list (§6). Filter,
+   page through, tick things off there, or "Show this list on the page".
+6. **Next morning**, Today adds a new page. Yesterday's page stays as it is,
+   a paper log. If you add something to yesterday's page later, it syncs to
+   **yesterday's** day node in Tana.
 
 ---
 
-## 3. Flows
+## 3. Handwriting → outline
 
-### 3.1 Today's top 5
+The grammar is deliberately small and reads like Tana:
 
-```
-tap [Today]
-  └─ TaskPanel renders tasks.json immediately (no network wait, one e-ink paint)
-     └─ if online: GET /tasks → replace list → one repaint, "Synced 07:42"
+| You write | Becomes in Tana |
+| --- | --- |
+| A line starting with a dash `–` | A node. |
+| Starting further right, at the next indent guide | A **child** of the node above. |
+| A line with no dash, directly under a node at the same indent | **Continuation** of that node (a long thought that wraps). |
+| A first line with no dash, or a line after an empty ruled line | A node (for headings and plain notes). |
+| A small box `☐` at the start | A **#task** node. Deadline Date is the page's date, Priority stays at the default P3. This matches your #task rules. |
+| Text in an empty task row | The same: a new **#task**. |
+| Typed text boxes (Supernote keyboard) | Same rules. Leading `- ` and indentation are taken from the text. |
 
-tap a task row
-  └─ toggle strike-through locally (instant, one repaint), write tasks.json
-     └─ outbox: { opId, type: "done" | "undone", taskId, at }
+How the plugin reads a page (device side, works offline):
 
-close panel / tap [Sync] / next open
-  └─ flush outbox (coalesced: done+undone on the same task cancel out)
-     └─ POST /done → Worker → check_node / uncheck_node
-```
+1. **Assign strokes to ruled lines.** Each stroke goes to the line slot that
+   holds the median y of its points. The template's ruled lines make this
+   reliable.
+2. **Find each line's indent level.** Take the line's leftmost x, round it to
+   the nearest indent guide, and cap it at *previous level + 1*.
+3. **Detect markers.**
+   - **Dash:** the first stroke of a line that is short, flat and followed by
+     a gap.
+   - **Box:** a small closed, roughly square first stroke.
+4. **Recognize** each line's remaining strokes with the device's own
+   recognizer (`recognizeElements`). This gives a draft text per line.
 
-Ops flush when the panel closes, not on every tap. An accidental tap is undone
-by tapping again, with no network round trip and no undo timer, which wouldn't
-work on e-ink anyway.
+On sync, the Worker gives Claude the draft lines and a PNG of the page. Claude
+returns **corrected English text per node**. It may merge wrapped lines into
+one node, but it may not invent or reorder content. The Worker builds the Tana
+Paste deterministically from that result.
 
-### 3.2 Handwriting → Tana
-
-```
-write in any NOTE page with the native pen
-lasso the lines → tap [→ Tana]
-  └─ SendPanel:
-       getLassoElements()            → strokes
-       recognizeElements(strokes)    → draft text (on-device)
-       generateLassoPreview(privDir) → PNG
-     shows the draft text + [Send] [Cancel]
-tap [Send]
-  └─ outbox: { opId, type: "note", draft, png, capturedAt, page }
-     └─ POST /note → Worker:
-          1. idempotency check (opId)
-          2. Claude: image + draft → JSON { title, outline[], tasks[], ideas[], ... }
-             (system prompt: output English only; translate if written in Dutch;
-              keep the hierarchy from indents and bullets; don't invent content)
-          3. build Tana Paste deterministically from that JSON
-             (the LLM never writes raw Tana Paste)
-          4. get_or_create_calendar_node(today) → import_tana_paste under it
-          5. store opId → { memoId, title }
-  └─ SendPanel: "Sent: <title>" or "Queued, 2 waiting for Wi-Fi"
-```
-
-*Optional, later:* after a successful send, stamp a small "→ Tana 27/10" text
-box next to the lasso (`insertText`). Then the page shows what has already
-been sent, like a ticked-off paper note. This needs `FILE:WRITE`.
-
-### 3.3 Offline
-
-- The Nomad usually has Wi-Fi off, so the outbox is not optional. It is also
-  cheap: a folder of JSON files in the private directory.
-- **Flush triggers:**
-  - opening any panel,
-  - closing the TaskPanel,
-  - the [Sync] button,
-  - right after queueing a note.
-
-  Plugins have no reliable background execution, so we don't count on any.
-- **Retries:** exponential backoff per op. After 5 failures an op is
-  "stuck" and shown in ConfigPanel with the error. It is never silently
-  dropped.
-- **Recognition works offline** (to verify in M0), so the draft text is
-  captured even without Wi-Fi.
+**IDs make it incremental.**
+- The plugin remembers which strokes became which Tana node.
+- New lines later are appended, and a new indented line under an
+  already-synced node becomes its child in Tana.
+- **Paper never deletes in Tana.** Erasing synced writing does nothing there.
+  Editing a synced line (adding words to it) updates that node's name (M5).
 
 ---
 
-## 4. API contract
+## 4. Architecture
 
-All requests send `Authorization: Bearer <passphrase>`. Responses are JSON.
+```
+ Supernote Nomad
+┌──────────────────────────────────────────────────────────────┐
+│ NOTE app ── "Tana" notebook (one page per day)              │
+│   toolbar: [Today] [Sync] [Tasks]   lasso toolbar: [→ Tana] │
+│ PluginHost (React Native 0.79) ── "Tana" plugin             │
+│   page renderer · stroke reader · outbox · task cache       │
+│   listeners: pen-up (auto-sync, tick detection), lifecycle  │
+└──────────────┬───────────────────────────────────────────────┘
+               │ HTTPS · Bearer device passphrase · only when online
+┌──────────────▼───────────────────────────────────────────────┐
+│ Cloudflare Worker (TypeScript)                               │
+│   GET /tasks (snapshot)   POST /sync (batch of ops)          │
+│   KV: opId → result (idempotency) · domain map cache         │
+│   Durable Object "TanaSession": OAuth tokens + MCP client    │
+│   secrets: DEVICE_TOKEN_HASH, ANTHROPIC_API_KEY              │
+└──────┬───────────────────────────────────────┬───────────────┘
+       │ MCP (Streamable HTTP, OAuth)          │ Messages API (image + text)
+       ▼                                       ▼
+  Tana Outliner hosted MCP (app.tana.inc/mcp)  Claude
+```
+
+These parts are unchanged from v1:
+- Secrets live only in the Worker.
+- The hosted Tana MCP is the only option: the local MCP needs the desktop app
+  running, and the Input API is write-only.
+- One device passphrase, typed once in the plugin's config screen.
+
+---
+
+## 5. Plugin internals
+
+### 5.1 Notebooks and pages
+
+- **One notebook per month**, for example `Note/Tana/2026-10.note`, with one
+  page per day plus continuation pages. This keeps files small and makes
+  flipping back easy. The plugin creates it with `createNote` and our own
+  template image.
+- **Toolbar buttons** (shown in NOTE):
+  - **Today** opens the month's notebook, adds today's page if needed
+    (`insertNotePage` with the "Today" template), renders it and jumps to it.
+  - **Sync** has no UI (`showType: 0`). It runs the sync in the background and
+    updates the header text.
+  - **Tasks** opens the task panel (§6).
+- **Lasso button → Tana:** sends a lasso selection from *any* notebook,
+  following the same grammar. It lands on the day node of the date you sync it
+  (keeps the v1 idea).
+
+### 5.2 Rendering
+
+- Text boxes go on the **main layer**. The SDK only allows text boxes there,
+  so plugin text and your ink share a layer. They are inserted as
+  **non-editable** (`textEditable: 1`) in one batch (`insertPageElements`).
+- The plugin keeps the uuid of every element it drew, so it can tell its own
+  elements apart from your ink.
+- **Re-rendering the task zone happens only on request:** Today, a new list
+  from the panel, or "Refresh tasks".
+  - It replaces the plugin's row text.
+  - It clears your ticks in that zone, which have been processed by then.
+  - Sync itself never moves anything you can see. It only adds ✓ marks and
+    updates the header.
+
+### 5.3 Reading ticks
+
+- A stroke belongs to row *r* when most of its points fall inside that row's
+  band.
+- **Done:** a stroke in the checkbox, or a long flat stroke across the task
+  text (a strike-through).
+- **Undo:** erase the tick.
+  - Erased before sync: nothing is sent.
+  - Erased after sync: the task is unchecked in Tana (one-off tasks only).
+- **New task:** handwriting in an empty row's text area (§3).
+- **Other ink** in a row with a task is ignored, so you can annotate.
+
+### 5.4 Local state and outbox
+
+- **Ledger** per page: date, rows (slot → task id), plugin element uuids, and
+  lines (strokes → Tana node id and status).
+- **Task cache:** the last snapshot from `GET /tasks`.
+- **Outbox:** operations, each with a client `opId` so replays are harmless.
+- **Storage:** AsyncStorage, a native module that the plugin build script
+  packages. If it isn't available, any React Native file library works.
+  Checked in the spike.
+
+### 5.5 Sync
+
+1. Read the page (`getElements`). Diff it against the ledger to find new
+   ticks, erased ticks, new lines and edited lines.
+2. Queue ops into the outbox. **This step works offline.**
+3. If online, send one `POST /sync` with all pending ops and apply the
+   per-op results: node ids, ✓ marks, errors.
+4. Pull `GET /tasks` (ETag, so cheap when unchanged) and update the header.
+
+**Triggers:**
+- the Sync button;
+- opening Today;
+- auto-sync, optional, about 60 s after the last pen-up, only if something
+  changed. This relies on the pen-up listener running in the background, and
+  the lifecycle docs say a stopped plugin "can still run in the background".
+
+### 5.6 Permissions
+
+All three are needed. Choose **"Always allow"** once for each:
+
+| Permission | Why |
+| --- | --- |
+| `FILE:READ` | Read page elements and render a page PNG. |
+| `FILE:WRITE` | Create notebooks and pages, insert text boxes. |
+| `INTERNET` | Talk to the Worker. |
+
+---
+
+## 6. Tasks: the Today list, filters and paging
+
+### 6.1 Data
+
+`GET /tasks` returns a compact snapshot of **all open tasks**: one-off and
+recurring, probably a few hundred, a few tens of KB. Filtering and paging then
+happen **on the device**, so they work offline.
+
+For each task:
+
+| Field | Notes |
+| --- | --- |
+| `id`, `name` | |
+| `priority` | P1–P4 |
+| `deadline`, `someday` | |
+| `domain` | Home or Work, resolved by the Worker: task → *Parent area or Project* → (project → *Parent Area*) → area → *Domain*. Tasks without an area show as "Unsorted". |
+| `area` | |
+| `recurring` | Occurrence included. |
+| `delegated` | |
+| `onDayNode` | Date of the day node the task lives on. |
+
+### 6.2 Views
+
+| View | Rule |
+| --- | --- |
+| **Today** (default on the page) | Unchecked, not Someday, Deadline ≤ today or living on today's day node. Excludes 🤖 routine tasks and `Decide:` items. |
+| **This week** | Deadline ≤ Sunday. |
+| **All** | Every open task. |
+
+- **Filters** on top of any view: Priority (P1, P2, P3, P4, multi-select) and
+  Domain (Home / Work / All).
+- **Sort order:** P1 → P4, then oldest deadline first.
+- **Paging:** 6 rows on the page, 8 in the panel, with ‹ Prev / Next › and
+  "2 / 6".
+
+### 6.3 Tasks panel (plugin UI, opened from Tasks)
+
+```
+┌──────────────────────────────────────────────────────┐
+│ Tasks                          Synced 10:14   [Sync] │
+│ [Today] [Week] [All]                                 │
+│ [P1] [P2] [P3] [P4]          [Home] [Work] [Both]    │
+├──────────────────────────────────────────────────────┤
+│ ☐ Send budget proposal to finance   P1 · Work · today│
+│ ☐ Ask Ron for the Q4 numbers        P2 · Work · today│
+│ … 8 rows, whole row is the tap target, no scrolling  │
+├──────────────────────────────────────────────────────┤
+│ ‹ Prev            page 2 / 6               Next ›    │
+│ [ Show this list on today's page ]        [ Close ]  │
+└──────────────────────────────────────────────────────┘
+```
+
+E-ink rules:
+- Black on white only.
+- No animations or spinners.
+- Cached data first, then at most one repaint.
+
+### 6.4 Recurring tasks
+
+Your rule is that a #recurring task must **never** simply be checked: Tana's
+*Complete and reschedule* command handles it, and MCP can't run commands. So
+the Worker **emulates the command** when you tick one:
+
+1. Move Deadline Date forward by its Occurrence. The Occurrence is one of the
+   phrases your schema allows ("In seven days", "In four weeks", "In one
+   month", "In one year").
+2. Leave the task unchecked.
+3. Write a checked history entry.
+
+If the Occurrence can't be parsed, nothing changes and the row shows ⚠.
+Undoing a recurring completion is manual in Tana.
+
+---
+
+## 7. Worker API
+
+All requests send `Authorization: Bearer <passphrase>`.
+
+**`GET /tasks`** returns the snapshot. It is ETag-cached.
 
 ```http
-GET /tasks?date=2026-10-27
-→ 200 { "date": "2026-10-27", "generatedAt": "…",
-        "tasks": [ { "id": "…", "name": "…", "priority": "P1",
-                     "deadline": "2026-10-27", "overdueDays": 0 } ] }
-
-POST /done   { "opId": "uuid", "taskId": "…", "done": true }
-→ 200 { "ok": true }              (replaying the same opId returns the same body)
-
-POST /note   { "opId": "uuid", "capturedAt": "ISO", "date": "2026-10-27",
-               "draft": "device OCR text", "png": "<base64>",
-               "source": { "file": "…", "page": 3 } }
-→ 200 { "memoId": "…", "title": "…", "nodes": 7 }
-
-→ 401 bad token · 409 opId in flight · 503 { "reauth": true } Tana OAuth needs a redo
+GET /tasks
+→ 200 { "generatedAt": "…", "today": "2026-10-29",
+        "tasks": [ { "id": "…", "name": "…", "priority": "P1", "deadline": "2026-10-29",
+                     "someday": false, "domain": "work", "area": "…",
+                     "recurring": null, "delegated": false, "onDayNode": null } ] }
 ```
+
+**`POST /sync`** takes a batch of ops. Each op is idempotent per `opId`.
+
+```http
+POST /sync
+{ "ops": [
+  { "opId": "u1", "type": "complete",   "taskId": "…" },
+  { "opId": "u2", "type": "uncomplete", "taskId": "…" },
+  { "opId": "u3", "type": "lines", "date": "2026-10-29", "pagePng": "<base64, optional>",
+    "lines": [ { "key": "p3:l4", "level": 0, "marker": "dash", "draft": "Q4 planning",
+                 "parentNodeId": null },
+               { "key": "p3:l5", "level": 1, "marker": "dash", "draft": "hire second designer",
+                 "parentKey": "p3:l4" },
+               { "key": "p3:l7", "level": 0, "marker": "box", "draft": "call the plumber" } ] }
+] }
+→ 200 { "results": [
+  { "opId": "u1", "ok": true },
+  { "opId": "u2", "ok": true },
+  { "opId": "u3", "ok": true, "nodes": { "p3:l4": "nodeId…", "p3:l5": "nodeId…", "p3:l7": "nodeId…" } }
+] }
+```
+
+**`complete`** behaves differently per task type:
+- **One-off:** `check_node`.
+- **Recurring:** the emulation in §6.4.
+
+**`lines`** is processed in four steps:
+1. `get_or_create_calendar_node(date)`.
+2. Claude cleanup and translation into English.
+3. Build the Tana Paste.
+4. `import_tana_paste`, under the day node or under an existing parent node.
 
 ---
 
-## 5. Mapping to your Tana graph
+## 8. Rules for writing into Tana
 
-I read your workspace schema (read-only) so this fits how you already work:
-
-- **#task**:
-  - done-status is the **checkbox** (`check_node`). The Task Status field is
-    not the done-status.
-  - Fields: Deadline Date, Priority (P1 Now / P2 Leverage / P3 Neutral,
-    which is the default / P4 Overhead), Someday, Delegated to.
-  - Your rule: new items go on **today's day node**.
-- **#recurring task** extends #task, and **must never be checked**: that ends
-  the series. Completing one means running Tana's *Complete and reschedule*
-  command, which MCP can't trigger.
-- **#memo** is your "raw capture with sorting bins": Tasks, Recurring tasks,
-  Ideas, 1:1 notes, Discussion points. That is exactly what a handwritten
-  brain-dump is.
-
-### Proposed "top 5" query (v1)
-
-```
-#task  AND unchecked  AND NOT #recurring task
-AND (   Deadline Date ≤ today AND Someday unchecked
-     OR the task lives on today's day node )
-AND name does not start with "🤖" (work for routines) or "Decide:" (answered with an Outcome child, not a check)
-ORDER BY  Priority (P1, P2, then P3/P4),  Deadline Date ascending (oldest overdue first)
-LIMIT 5
-```
-
-Why exclude recurring tasks in v1: a read-only test today for "unchecked #task
-with Deadline Date ≤ today" returned **8 matches, all #recurring task**
-(household chores, some with deadlines from 2023). A naive list would be
-mostly chores you're not allowed to tick from the device. Later (M4), the
-Worker could emulate *Complete and reschedule*: write a checked history copy,
-then move Deadline Date forward by the Occurrence field ("In four weeks").
-
-### Note shape in Tana
-
-Today's day node gets a #memo. The Worker builds it from the model's JSON:
-
-```
-- Q4 hiring thoughts #memo
-  - Tasks::
-    - Ask finance for the Q4 headcount numbers
-  - Ideas::
-    - Pair new hires with a buddy for the first month
-  - Need a second designer before January
-    - Check whether the budget allows a senior
-```
-
-The bins are filled in English. The body keeps your handwritten hierarchy,
-translated into English. The tag and field IDs live in Worker config, not in
-code.
+- **Where:** the day node of the **page's date**, directly as nodes. This is
+  open decision 2: alternatives are a parent node or a #memo.
+- **Language:** everything written to Tana is **English**, as in the original
+  brief. Handwriting in Dutch is translated, and the paper keeps your original.
+- **New tasks** follow your #task rules:
+  - tag #task,
+  - on the day node,
+  - Deadline Date filled in (never empty without Someday),
+  - Priority at its default.
+- **Never delete** anything in Tana from the device.
+- **Conflicts:**
+  - A task completed in Tana meanwhile turns a tick into a no-op.
+  - A renamed task keeps its old text on the page until the next refresh.
+    Ticks act on task ids, so they still hit the right task.
 
 ---
 
-## 6. E-ink UI rules (plugin panels)
+## 9. What we can build: milestones
 
-Nomad: 7.8", 1404×1872 px, 300 ppi.
-
-- Pure black on white, with no greys that dither badly. The system font is
-  large: 20sp+ body text, 28sp headers.
-- **No scrolling.** The TaskPanel shows exactly 5 rows, each about 15 mm tall,
-  and the whole row is the tap target. Names are clamped to 2 lines.
-- **No animations.** Use `Pressable` without opacity or ripple feedback. No
-  spinners: show static text ("Syncing…") instead.
-- At most **two paints per interaction**: the cached state first, then the
-  fresh state. Never a progressive render.
-- Every panel has a full-width [Close] and a [Sync] or refresh button.
-
-```
-┌──────────────────────────────────────────┐
-│  Tue 27 Oct · Top 5              [Sync]  │
-├──────────────────────────────────────────┤
-│  ☐  Send budget proposal to finance      │
-│     P1 · due today                       │
-├──────────────────────────────────────────┤
-│  ☑  ~~Review landing page copy~~         │
-│     P2 · 3 days overdue  (struck, queued)│
-├──────────────────────────────────────────┤
-│  ☐  …                                    │
-├──────────────────────────────────────────┤
-│  ☐  …                                    │
-├──────────────────────────────────────────┤
-│  ☐  …                                    │
-├──────────────────────────────────────────┤
-│  Synced 07:42 · 1 pending      [Close]   │
-└──────────────────────────────────────────┘
-```
-
----
-
-## 7. Security
-
-- Secrets live only in the Worker: the Tana OAuth tokens (Durable Object
-  storage) and `ANTHROPIC_API_KEY` (Worker secret).
-- The plugin package contains only code. The device passphrase is typed in
-  once and stored in the plugin's private directory. If the Nomad is lost,
-  rotate `DEVICE_TOKEN_HASH`.
-- The Worker exposes three narrow verbs, not a generic Tana proxy. A leaked
-  passphrase can read the top 5, tick tasks and add memos, nothing more.
-- Rate limiting: 30 requests/min per token, plus a lockout after repeated
-  401s.
-
----
-
-## 8. Repo layout and CI
-
-```
-plugin/                     React Native Supernote plugin
-worker/                     Cloudflare Worker (wrangler, TypeScript, vitest)
-docs/DESIGN.md
-.github/workflows/plugin.yml   ubuntu: npm ci → ./buildPlugin.sh → upload *.snplg artifact
-.github/workflows/worker.yml   typecheck + tests; deploy stays a manual `wrangler deploy`
-```
-
-**Install:** download the `.snplg` artifact, copy it to `MyStyle/` on the
-Nomad over USB or via the browser transfer page, then *Settings → Apps →
-Plugins → Add Plugin*.
-
----
-
-## 9. Milestones (revised)
-
-| # | Goal | Done when |
+| # | Milestone | Done when |
 | --- | --- | --- |
-| **M0a** Plugin spike (½ day) | A "hello" plugin built in CI | It installs on your Nomad. The [→ Tana] lasso button shows the recognized text of your handwriting, writes a PNG to the private directory, and a `fetch()` to a test URL succeeds after granting INTERNET. Note your firmware version. |
-| **M0b** Tana link spike (½ day) | Worker + OAuth to `app.tana.inc/mcp` | `/oauth/start` → approve → `GET /tasks` returns the real top 5 as JSON. Note how long the refresh token lives. |
-| **M1** Task panel | Read, strike and sync | Ticking on the Nomad checks the node in Tana. It works with Wi-Fi off and syncs later. Replays don't double-apply. |
-| **M2** Send to Tana | Lasso → #memo | A handwritten Dutch or English paragraph lands as an English #memo on today's day node, with bins filled. |
-| **M3** Polish | E-ink pass, stuck-op view, "Page → Tana", sent-stamp | One week of daily use without opening Tana on another device for these two jobs. |
-| **M4** (maybe) | Recurring tasks, "paper mode" | See §11. |
+| **M0** | Spike (1–2 days) | See §10: every unknown has a yes or no on your Nomad. |
+| **M1** | Today page, read-only | Today creates the monthly notebook and today's page from our template, and renders header + 6 tasks from Tana. Sync refreshes. Works offline from cache. |
+| **M2** | Ticks → Tana | Ticking or striking a task completes it in Tana (recurring included, via emulation). Erasing a tick before sync cancels it. Outbox and idempotency are proven by flipping Wi-Fi off and on. |
+| **M3** | Writing → day node | Dash, indent, continuation and box grammar → nodes with hierarchy on the page's day node, in English. ✓ marks. Later lines append to the right parent. |
+| **M4** | Tasks panel | Filters (view, P1–P4, Home/Work), paging, tap to complete, "Show on page". |
+| **M5** | Polish | Auto-sync on idle, continuation pages, quick-add in empty rows, lasso → Tana from other notebooks, typed text boxes, editing synced lines. |
 
-If **M0a fails** (no plugin support on your firmware, INTERNET blocked,
-unusable panels), we fall back to the brief: a native Kotlin APK and the pen
-spike. If the pen is sluggish there too, the cloud-folder OCR fallback is next.
+**CI:** a GitHub Actions workflow builds the plugin package (`.snplg`) as a
+downloadable artifact on every push. The Worker gets typecheck and tests.
+Deploying the Worker is a manual `wrangler deploy`.
 
 ---
 
-## 10. Risks and unknowns
+## 10. Unknowns to settle in the M0 spike
 
-| Risk | Impact | Mitigation |
+| # | Question | Fallback if "no" |
 | --- | --- | --- |
-| The plugin system is young. Firmware 3.29.x added permission management and broke older plugin builds. | An update can break the plugin. | Pin `sn-plugin-lib`, keep the plugin small, and re-test after each firmware update. |
-| Hosted Tana MCP is **beta**. OAuth refresh lifetime is unknown, and it's unconfirmed whether non-Claude clients can register. | Tasks stop syncing until you re-auth. | M0b checks this first. The Worker returns `reauth: true` and the plugin shows "Re-link Tana" with the URL. |
-| Device recognition quality on your handwriting, or on mixed Dutch/English. | Bad drafts. | The vision model sees the PNG too. The draft is only a hint. |
-| Plugin panels may render slowly on e-ink (RN in a full-screen container). | Feels sluggish. | Few repaints, no animation, cached-first render. Measure in M0a. |
-| `generateLassoPreview` may not write to the private directory. | Needs `FILE:WRITE`. | Request it (one more "Always allow"), or use `generateNotePng` on the page and crop. |
-| The Linux build of `.snplg` in CI: the docs ship `buildPlugin.sh`, but some community posts say dev tooling is Windows/macOS only. | CI can't build the package. | Verify in M0a. If it fails, build on a macOS runner. |
+| 1 | Does the device keep a custom **template image** for `createNote` / `insertNotePage`? | Draw the boxes and lines as geometry from the plugin. |
+| 2 | How fast does inserting ~20 non-editable **text boxes** in one batch render on e-ink? | Fewer boxes: one text box per row, meta merged into the name. |
+| 3 | Do `getElements` + `recognizeElements` **per line** give usable text for your handwriting, Dutch and English? | Rely more on Claude with the page PNG. |
+| 4 | Does the **pen-up listener** fire while the plugin's UI is closed (auto-sync, instant tick detection)? | Sync button only. |
+| 5 | Can a **toolbar button with no UI** (`showType: 0`) run the whole sync in the background? | The Sync button briefly opens a tiny status panel. |
+| 6 | Is **AsyncStorage** (a native module) packaged and working inside PluginHost? | Another React Native file library. |
+| 7 | Does `import_tana_paste` on the hosted MCP **return the new node ids**? | Read the day node's children after import and match by text. |
+| 8 | Can our Worker **complete Tana's OAuth** as a non-Claude client, and how long do refresh tokens live? | Re-link from a phone when needed. The plugin shows "Re-link Tana". |
+| 9 | Does the CI build of `.snplg` on Linux install and run on the device? | Build on a macOS runner. |
 
 ---
 
-## 11. Ideas for later
+## 11. Decisions
 
-- **Paper mode.** The plugin writes today's top 5 as text boxes onto a "Today"
-  note page. You tick them **with the pen**. A pen-up listener
-  (`registerEventListener('event_pen_up')`) sees a stroke inside a task's box,
-  marks it done and queues `/done`. That is the closest to "real paper wired
-  into a real system". It is unverified whether pen-up events reach the plugin
-  while its panel is closed.
-- **Recurring tasks:** emulate *Complete and reschedule* in the Worker (see §5).
-- **Two-way stamp:** a memo node links back to the note file and page it came
-  from.
-
----
-
-## 12. Open decisions
-
-| # | Question | My recommendation |
+| # | Decision | Status |
 | --- | --- | --- |
-| 1 | Plugin vs native APK? | **Plugin** (§1). Keep the APK as the fallback. |
-| 2 | What defines "today's top 5"? | **The computed query in §5**, built from fields you already maintain: Deadline ≤ today or on today's day node, P1 → P2 → rest, one-off tasks only. No new tagging habit. |
-| 3 | Where do OCR'd notes land? | **A #memo on today's day node**, bins filled by the Worker. It matches your existing capture flow and your "new items go on today's day node" rule. |
-| 4 | Offline queue in v1? | **Yes, from the start.** Wi-Fi is usually off on the Nomad, the queue is a folder of JSON files, and idempotent `opId`s have to be designed in on day one anyway. |
-| 5 | Recurring tasks in the top 5? | **Not in v1** (§5). Add them in M4 with an emulated reschedule. |
+| 1 | Plugin, not a standalone app | **Decided** (you, 2026-10-29) |
+| 2 | Offline first | **Decided** (you) |
+| 3 | Tasks and writing on one page, plus a Sync button | **Decided** (you) |
+| 4 | Notebook structure: one per month, a page per day | Open: my recommendation |
+| 5 | Where writing lands: directly on the day node | Open: my recommendation |
+| 6 | "Today" list rule (§6.2) | Open: my recommendation |
+| 7 | Recurring tasks: show them, and emulate Complete and reschedule | Open: my recommendation |
+| 8 | Everything in Tana is English | Assumed from the original brief |
 
 ---
 
 ## Sources
 
 - Supernote plugin docs: <https://docs.supernote.com/llms.txt>. Pages used:
-  [Plugin principles](https://docs.supernote.com/en/principle.md),
-  [Your first plugin](https://docs.supernote.com/en/first-plugin.md),
-  [Permissions](https://docs.supernote.com/en/plugin-base/permission.md),
-  [recognizeElements](https://docs.supernote.com/en/api-reference/supernote-plugin/plugin-comm-api/recognize-elements.md),
-  [generateLassoPreview](https://docs.supernote.com/en/api-reference/supernote-plugin/plugin-comm-api/generate-lasso-preview.md),
-  [registerEventListener](https://docs.supernote.com/en/api-reference/supernote-plugin/plugin-manager/register-event-listener.md)
-- Supernote Manta and Nomad changelog (sideloading switch in 3.16.27):
-  <https://support.supernote.com/en_US/change-log/changelog-for-manta-and-nomad>
-- Nomad review (third-party apps laggy with the stylus):
-  <https://www.androidpolice.com/supernote-nomad-review/>
-- Tana Outliner API and MCP (local vs hosted, OAuth, plan, tools):
-  <https://outliner.tana.inc/learn/features/local-api-mcp>
+  - [Plugin principles](https://docs.supernote.com/en/principle.md)
+  - [Your first plugin](https://docs.supernote.com/en/first-plugin.md)
+  - [Permissions](https://docs.supernote.com/en/plugin-base/permission.md)
+  - [Element operations](https://docs.supernote.com/en/plugin-base/file-op/element-op.md)
+  - [Coordinate system](https://docs.supernote.com/en/plugin-base/coordinate-system.md)
+  - [TextBox](https://docs.supernote.com/en/plugin-base/plugin-note/textbox.md)
+  - API pages: `createNote`, `insertNotePage`, `insertText`, `insertPageElements`,
+    `getElements`, `recognizeElements`, `registerEventListener`,
+    `registerMotionListener`, `registerPluginLifeListener`, `canHandwrite`
+- `sn-plugin-lib` 0.2.3 and `@supernote-plugin/sn-plugin-template` 1.0.13 on npm.
+  `buildPlugin.sh` bundles JS and compiles native modules into the package.
+- Tana Outliner API and MCP: <https://outliner.tana.inc/learn/features/local-api-mcp>
+- Prior art: SuperDashboard, a community plugin:
+  <https://github.com/AgP42/SuperDashboard>
