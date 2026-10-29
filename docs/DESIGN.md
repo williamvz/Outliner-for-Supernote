@@ -1,8 +1,13 @@
 # Design: Supernote ⇄ Tana Outliner
 
-Status: **design v2 for discussion**, 2026-10-29. Nothing is built yet.
-v1 of this doc (a sideloaded app with a separate canvas) is superseded: the
-plugin route is confirmed.
+Status: **design v2**, 2026-10-29. The M0 spike is built (see
+[README](../README.md)); everything else here is design. v1 of this doc (a
+sideloaded app with a separate canvas) is superseded: the plugin route is
+confirmed.
+
+The screens below are mockups at the Nomad's resolution (1404 × 1872), drawn
+from the same `layout.json` and template the plugin uses. Handwriting is
+simulated with a handwriting font.
 
 ## TL;DR
 
@@ -20,6 +25,10 @@ plus optional quiet auto-sync, closes the loop:
 - **Everything works offline.** Ticks and writing are kept on the device and
   sent when Wi-Fi is back. The page's date decides which Tana day node the
   writing goes to, not the time of syncing.
+- **Run out of room?** Turn the page. Each day has as many notes pages as you
+  need, and they continue the same outline.
+- **Connecting** is a QR code: scan it with your phone, approve in Tana, done.
+  Nothing is typed on the Nomad.
 
 The plugin SDK supports all of these. The remaining unknowns are listed in
 §10 and are cheap to test in a one-to-two-day spike.
@@ -31,26 +40,17 @@ The plugin SDK supports all of these. The remaining unknowns are listed in
 Nomad page: 1404 × 1872 px at 300 ppi, so 1 mm ≈ 11.8 px. We read the exact
 size at runtime with `getPageSize`.
 
-```
-┌────────────────────────────────────────────────────────────┐
-│ Thu 29 Oct          Today · All · 1/3          Synced 07:42│ ← header (plugin text)
-├────────────────────────────────────────────────────────────┤
-│ ☐  Send budget proposal to finance        P1 · Work · today│
-│ ☑  Review landing page copy               P2 · Work · −3d  │ ← your tick = done
-│ ☐  Book dentist appointment            ↻  P3 · Home · today│ ← ↻ recurring
-│ ☐  Ask Ron for the Q4 numbers             P2 · Work · today│
-│ ☐  _______________________ (empty row: write a new task)   │
-│ ☐  _______________________                                 │
-├════════════════════════════════════════════════════════════┤
-│ ┊    ┊    ┊    ┊      (faint indent guides, from template) │
-│ Q4 planning                                             ✓  │ ← ✓ = in Tana
-│ ┊ – hire a second designer                              ✓  │
-│ ┊ ┊ – check the budget with finance                        │ ← not yet synced
-│ ☐ call the plumber about the boiler                        │ ← box = new #task
-│ ___________________________________________________________│
-│ ___________________________________________________________│
-└────────────────────────────────────────────────────────────┘
-```
+| After tapping **Today** | After ticking, writing and **Sync** |
+| --- | --- |
+| <img src="mockups/today-page.png" width="400" alt="Fresh Today page with six tasks"> | <img src="mockups/today-page-after-sync.png" width="400" alt="Today page with ticks, outline writing and sync marks"> |
+
+On the right:
+- Row 2 is ticked in its box and row 4 is struck through: both are done.
+- ↻ marks a recurring task.
+- The writing uses dashes and indent guides as an outline. The ☐ line becomes
+  a new #task.
+- The small gray ✓ on the right means "this line is in Tana". The last line
+  was written after the sync, so it has none yet.
 
 Each part of the page has an owner:
 
@@ -69,10 +69,34 @@ Each part of the page has an owner:
 | Writing zone | ~10 ruled lines × 93 px (≈ 8 mm, like Supernote's lined templates) |
 | Indent guides | every 80 px (≈ 7 mm) |
 
-On more writing:
-- When you need more space, add a page normally. A page without a task zone
-  counts as a **continuation** of the day before it and gets a small
-  "Thu 29 Oct (cont.)" header.
+### More writing room: notes pages
+
+<img src="mockups/notes-page.png" width="400" align="right" alt="Notes page continuing the day's outline">
+
+The writing zone on the Today page has ten lines. When it's full, **turn the
+page**:
+
+- **Today** always creates the day's page *plus one blank notes page* after
+  it, so there is a page to turn to.
+- A **notes page** is all ruled lines with the same indent guides, under a
+  small "Thu 29 Oct · notes 2" header.
+- When you start writing on the last notes page of the day, the next Sync
+  adds another blank one. There is always a fresh page ahead, as in a paper
+  notebook.
+- **One outline per day.** All pages of a day are read as one continuous
+  outline. An indented first line on a notes page continues under the last
+  node of the page before. In the mockup, "agenda: …" becomes a child of
+  "idea: weekly review on Fridays" from the Today page.
+- **Dates come from the page.** Notes pages belong to the Today page before
+  them, so writing on them later still lands on that day's node.
+- The next morning's Today page goes after the last page of the previous
+  day. An unused spare notes page is removed first, so the notebook doesn't
+  fill up with blanks.
+- **Unverified on the device:** what Supernote does when you swipe past the
+  last page (spike Q10). If it adds a page with the same template, that works
+  too. If not, the spare page above covers it.
+
+<br clear="right">
 
 ---
 
@@ -139,6 +163,10 @@ Paste deterministically from that result.
 - **Paper never deletes in Tana.** Erasing synced writing does nothing there.
   Editing a synced line (adding words to it) updates that node's name (M5).
 
+What the page above becomes in Tana:
+
+<img src="mockups/tana-result.png" width="400" alt="The resulting outline on the day node in Tana">
+
 ---
 
 ## 4. Architecture
@@ -152,13 +180,13 @@ Paste deterministically from that result.
 │   page renderer · stroke reader · outbox · task cache       │
 │   listeners: pen-up (auto-sync, tick detection), lifecycle  │
 └──────────────┬───────────────────────────────────────────────┘
-               │ HTTPS · Bearer device passphrase · only when online
+               │ HTTPS · Bearer device token · only when online
 ┌──────────────▼───────────────────────────────────────────────┐
 │ Cloudflare Worker (TypeScript)                               │
 │   GET /tasks (snapshot)   POST /sync (batch of ops)          │
 │   KV: opId → result (idempotency) · domain map cache         │
 │   Durable Object "TanaSession": OAuth tokens + MCP client    │
-│   secrets: DEVICE_TOKEN_HASH, ANTHROPIC_API_KEY              │
+│   secrets: OWNER_PASSPHRASE_HASH, ANTHROPIC_API_KEY          │
 └──────┬───────────────────────────────────────┬───────────────┘
        │ MCP (Streamable HTTP, OAuth)          │ Messages API (image + text)
        ▼                                       ▼
@@ -169,7 +197,8 @@ These parts are unchanged from v1:
 - Secrets live only in the Worker.
 - The hosted Tana MCP is the only option: the local MCP needs the desktop app
   running, and the Input API is write-only.
-- One device passphrase, typed once in the plugin's config screen.
+- Changed since v1: no passphrase is typed on the Nomad. The device gets its
+  own token by scanning a QR code (§5.7).
 
 ---
 
@@ -183,7 +212,8 @@ These parts are unchanged from v1:
   template image.
 - **Toolbar buttons** (shown in NOTE):
   - **Today** opens the month's notebook, adds today's page if needed
-    (`insertNotePage` with the "Today" template), renders it and jumps to it.
+    (`insertNotePage` with the "Today" template) plus one blank notes page
+    (§1), renders it and jumps to it.
   - **Sync** has no UI (`showType: 0`). It runs the sync in the background and
     updates the header text.
   - **Tasks** opens the task panel (§6).
@@ -253,6 +283,48 @@ All three are needed. Choose **"Always allow"** once for each:
 | `FILE:WRITE` | Create notebooks and pages, insert text boxes. |
 | `INTERNET` | Talk to the Worker. |
 
+### 5.7 Settings and connecting to Tana
+
+| Settings | Connect to Tana |
+| --- | --- |
+| <img src="mockups/settings.png" width="400" alt="Settings panel"> | <img src="mockups/connect.png" width="400" alt="Connect panel with QR code"> |
+
+**Settings** opens from the plugin's entry in *Settings → Apps → Plugins*
+(the SDK's config button) or from the Tasks panel. It shows:
+
+- **Connection:** whether Tana is linked, whether the server is reachable,
+  the last sync and how many changes are waiting.
+  - **Connect / re-link Tana** opens the pairing screen.
+  - **Sync now** runs a sync.
+- **Today page:** which notebook is in use, how many tasks go on the page
+  (5, 6 or 7), and whether recurring tasks are shown.
+- **Sync:**
+  - Auto-sync after writing, on or off.
+  - Write notes to Tana in English, the default from the brief, or as written.
+
+**Connecting uses a QR code instead of typing.** Typing a URL and passphrase
+on an e-ink keyboard is the worst part of setup.
+
+1. The plugin asks the Worker for a pairing (`POST /pair/start`). It gets back
+   a short code and a link, and shows them as a QR code.
+2. You scan the code with your phone. The page on the phone asks for your
+   **owner passphrase**, once, on a real keyboard.
+3. If Tana isn't linked yet, or you chose re-link, the phone goes on to
+   Tana's own login and approval screen.
+4. The plugin polls `GET /pair/status` every few seconds while the screen is
+   open. When you approve, it receives **its own device token** and stores it.
+
+Safety:
+- Codes expire after 10 minutes and work once.
+- Only someone with the owner passphrase can approve a device or re-link Tana.
+- Device tokens are stored hashed in the Worker. "Forget this device" revokes
+  one.
+- The Worker URL is built into the plugin. It isn't a secret, and it can be
+  changed under Advanced.
+
+The M0 spike still uses the old Config screen (Worker URL + passphrase typed
+in). Pairing comes with M1.
+
 ---
 
 ## 6. Tasks: the Today list, filters and paging
@@ -292,20 +364,14 @@ For each task:
 
 ### 6.3 Tasks panel (plugin UI, opened from Tasks)
 
-```
-┌──────────────────────────────────────────────────────┐
-│ Tasks                          Synced 10:14   [Sync] │
-│ [Today] [Week] [All]                                 │
-│ [P1] [P2] [P3] [P4]          [Home] [Work] [Both]    │
-├──────────────────────────────────────────────────────┤
-│ ☐ Send budget proposal to finance   P1 · Work · today│
-│ ☐ Ask Ron for the Q4 numbers        P2 · Work · today│
-│ … 8 rows, whole row is the tap target, no scrolling  │
-├──────────────────────────────────────────────────────┤
-│ ‹ Prev            page 2 / 6               Next ›    │
-│ [ Show this list on today's page ]        [ Close ]  │
-└──────────────────────────────────────────────────────┘
-```
+<img src="mockups/tasks-panel.png" width="400" alt="Tasks panel with filters and paging">
+
+The mockup shows view **Today**, **P1 + P2**, **Work**, page 1 of 2.
+
+- Tapping a row ticks it, and the tick is queued like a tick on paper.
+- Long names are cut off with "…".
+- Drawing this at real size showed that eight rows only fit with compact
+  filter chips, which is why Sync sits next to the title.
 
 E-ink rules:
 - Black on white only.
@@ -331,7 +397,15 @@ Undoing a recurring completion is manual in Tana.
 
 ## 7. Worker API
 
-All requests send `Authorization: Bearer <passphrase>`.
+Requests from the device send `Authorization: Bearer <device token>`.
+
+**Pairing** (§5.7), without a device token:
+
+| Endpoint | Purpose |
+| --- | --- |
+| `POST /pair/start` | Returns `{ code, url, pollToken }`. The plugin draws `url` as a QR code. |
+| `GET /pair?code=…` | The phone page. Asks for the owner passphrase, then goes on to Tana OAuth if needed. |
+| `GET /pair/status?pollToken=…` | `pending`, then `{ deviceToken }` once, then `expired`. |
 
 **`GET /tasks`** returns the snapshot. It is ETag-cached.
 
@@ -400,11 +474,11 @@ POST /sync
 | # | Milestone | Done when |
 | --- | --- | --- |
 | **M0** | Spike (1–2 days) | See §10: every unknown has a yes or no on your Nomad. |
-| **M1** | Today page, read-only | Today creates the monthly notebook and today's page from our template, and renders header + 6 tasks from Tana. Sync refreshes. Works offline from cache. |
+| **M1** | Today page, read-only + connect | Settings and QR pairing (§5.7). Today creates the monthly notebook, today's page and a spare notes page from our templates, and renders header + 6 tasks from Tana. Sync refreshes. Works offline from cache. |
 | **M2** | Ticks → Tana | Ticking or striking a task completes it in Tana (recurring included, via emulation). Erasing a tick before sync cancels it. Outbox and idempotency are proven by flipping Wi-Fi off and on. |
-| **M3** | Writing → day node | Dash, indent, continuation and box grammar → nodes with hierarchy on the page's day node, in English. ✓ marks. Later lines append to the right parent. |
+| **M3** | Writing → day node | Dash, indent, continuation and box grammar → nodes with hierarchy on the page's day node, in English. One outline across the day's notes pages, with a fresh spare page kept ready. ✓ marks. Later lines append to the right parent. |
 | **M4** | Tasks panel | Filters (view, P1–P4, Home/Work), paging, tap to complete, "Show on page". |
-| **M5** | Polish | Auto-sync on idle, continuation pages, quick-add in empty rows, lasso → Tana from other notebooks, typed text boxes, editing synced lines. |
+| **M5** | Polish | Auto-sync on idle, quick-add in empty rows, lasso → Tana from other notebooks, typed text boxes, editing synced lines. |
 
 **CI:** a GitHub Actions workflow builds the plugin package (`.snplg`) as a
 downloadable artifact on every push. The Worker gets typecheck and tests.
@@ -425,6 +499,13 @@ Deploying the Worker is a manual `wrangler deploy`.
 | 7 | Does `import_tana_paste` on the hosted MCP **return the new node ids**? | Read the day node's children after import and match by text. |
 | 8 | Can our Worker **complete Tana's OAuth** as a non-Claude client, and how long do refresh tokens live? | Re-link from a phone when needed. The plugin shows "Re-link Tana". |
 | 9 | Does the CI build of `.snplg` on Linux install and run on the device? | Build on a macOS runner. |
+| 10 | When you swipe past the last page, does Supernote add a page, and with which template? | The plugin keeps a spare notes page ready (§1). |
+
+The spike's report panel (the **Tana** button) lists these questions with
+PASS, FAIL or INFO. The values in this mockup are examples; the real ones
+come from your Nomad.
+
+<img src="mockups/spike-report.png" width="400" alt="Spike report panel with example values">
 
 Partial answers from before the device test (2026-10-29):
 
@@ -452,7 +533,9 @@ Partial answers from before the device test (2026-10-29):
 | 5 | Where writing lands: directly on the day node | **Decided** (you) |
 | 6 | "Today" list rule (§6.2) | **Decided** (you) |
 | 7 | Recurring tasks: show them, and emulate Complete and reschedule | **Decided** (you) |
-| 8 | Everything in Tana is English | Assumed from the original brief |
+| 8 | Everything in Tana is English | Assumed from the original brief. A setting allows "as written" (§5.7). |
+| 9 | Notes pages: always one spare page ahead, one outline per day (§1) | Proposed |
+| 10 | Connect by QR pairing, owner passphrase entered on the phone (§5.7) | Proposed |
 
 ---
 
