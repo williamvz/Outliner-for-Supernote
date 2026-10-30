@@ -1,0 +1,16 @@
+{
+  "name": "Tana Sync",
+  "desc": "Tana Outliner tasks on a Today page; handwriting to day nodes",
+  "iconPath": "assets/icon.png",
+  "versionName": "0.1.0",
+  "versionCode": "1",
+  "pluginID": "7fx0gca8znr84pmo",
+  "pluginKey": "TanaSync",
+  "jsMainPath": "index",
+  "author": "williamvz",
+  "uses-permissions": [
+    "plugin.permission.FILE:READ",
+    "plugin.permission.FILE:WRITE",
+    "plugin.permission.INTERNET"
+  ]
+}

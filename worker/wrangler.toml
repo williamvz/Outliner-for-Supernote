@@ -1,0 +1,25 @@
+name = "tana-supernote"
+main = "src/index.ts"
+compatibility_date = "2026-10-01"
+
+# Non-secret settings. Workspace, tag and field ids are looked up in Tana at
+# runtime by name, so nothing personal lives in this public repo.
+[vars]
+TANA_MCP_URL = "https://app.tana.inc/mcp"
+TANA_ISSUER = "https://app.tana.inc"
+TIMEZONE = "Europe/Amsterdam"
+TASK_TAG = "task"
+RECURRING_TAG = "recurring task"
+
+# Secrets (wrangler secret put …):
+#   DEVICE_TOKEN_HASH  sha256 hex of the device passphrase
+# Optional:
+#   TANA_WORKSPACE_ID  pin a workspace instead of auto-detecting it
+
+[[durable_objects.bindings]]
+name = "SESSION"
+class_name = "TanaSession"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["TanaSession"]

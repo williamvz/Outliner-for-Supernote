@@ -1,0 +1,26 @@
+{
+  "base": { "width": 1404, "height": 1872 },
+  "margin": { "left": 96, "right": 96 },
+  "header": { "top": 36, "bottom": 156, "split": 704 },
+  "tasks": {
+    "top": 176,
+    "rowHeight": 112,
+    "rows": 6,
+    "checkboxLeft": 108,
+    "checkboxSize": 60,
+    "textLeft": 196,
+    "textRight": 1000,
+    "metaLeft": 1010,
+    "metaRight": 1308
+  },
+  "divider": { "y": 872 },
+  "writing": {
+    "top": 896,
+    "lineSpacing": 93,
+    "lines": 10,
+    "indentStep": 80,
+    "indentGuides": 6,
+    "markLeft": 1316,
+    "markRight": 1384
+  }
+}
