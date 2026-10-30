@@ -29,6 +29,13 @@ const NODE_ID = /<!--\s*node-id:\s*([^\s]+)\s*-->/;
 const REF = /\[([^\]]*)\]\(tana:([^)]+)\)/g;
 const FIELD_LINE = /^ {2}- \*\*(.+?)\*\*:\s?(.*)$/;
 
+/** "Frank #person" → "Frank": a reference's label without its tag. */
+const refName = (label: string) => label.replace(/\s+#\S+$/, '').trim();
+
+/** Inline references in a node name ("[Frank](tana:abc) appen") become plain text. */
+const plainText = (text: string) =>
+  text.replace(REF, (_all, label: string) => refName(label)).replace(/\s+/g, ' ').trim();
+
 export function parseNodeMarkdown(markdown: string): ParsedNode {
   const lines = markdown.split('\n');
   const first = lines[0] ?? '';
@@ -42,6 +49,8 @@ export function parseNodeMarkdown(markdown: string): ParsedNode {
     head = head.slice(box[0].length);
   }
 
+  // References first, so a reference's own "#tag" isn't read as the node's tag.
+  head = plainText(head);
   const tags: string[] = [];
   let tagMatch: RegExpExecArray | null;
   const trailingTag = /\s+#([^\s#]+)$/;
@@ -60,7 +69,7 @@ export function parseNodeMarkdown(markdown: string): ParsedNode {
     const refs: Ref[] = [];
     const text = raw
       .replace(REF, (_all, name: string, refId: string) => {
-        const clean = name.replace(/\s+#\S+$/, '').trim();
+        const clean = refName(name);
         refs.push({name: clean, id: refId});
         return clean;
       })

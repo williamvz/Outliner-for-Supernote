@@ -35,6 +35,14 @@ describe('parseNodeMarkdown', () => {
     expect(node.fields['Domain'].refs).toEqual([{name: 'Home', id: '71S1Ev-cmj'}]);
   });
 
+  it('turns inline references in the name into plain text', () => {
+    const node = parseNodeMarkdown(
+      '- [ ] [Alex Smith](tana:xw4e0yCds-) bellen over [Solar #project](tana:N9-TSg) #recurring_task <!-- node-id: r2 -->',
+    );
+    expect(node.name).toBe('Alex Smith bellen over Solar');
+    expect(node.tags).toEqual(['recurring task']);
+  });
+
   it('keeps a hash inside the name and reads checked boxes', () => {
     const node = parseNodeMarkdown('- [x] Fix issue #42 in the build #task <!-- node-id: n1 -->');
     expect(node.checked).toBe(true);

@@ -509,7 +509,13 @@ come from your Nomad.
 
 Partial answers from before the device test (2026-10-29):
 
-- **Q8:** Tana publishes OAuth metadata with dynamic client registration,
+- **Q8 (live, 2026-10-30):** the deployed Worker linked to Tana through
+  OAuth as its own client and reads the real workspace. The first snapshot had
+  118 open tasks (43 recurring); priority, deadline and Home/Work were filled
+  in. Built in 5 background batches of 35 MCP calls, about 20 s, because the
+  Workers free plan allows 50 outbound requests per invocation. Refresh-token
+  lifetime is still to be observed.
+- **Q8 (before deploy):** Tana publishes OAuth metadata with dynamic client registration,
   PKCE (S256), public clients and the refresh_token grant. A local run of the
   Worker registered itself and got a valid authorize redirect. Refresh-token
   lifetime is still unknown.
