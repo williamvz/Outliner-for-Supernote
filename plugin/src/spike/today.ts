@@ -15,7 +15,7 @@ import {
   insertText,
   jumpToPage,
   openFile,
-  pageSize,
+  pageSizeOf,
   PERMISSIONS,
   PluginManager,
   reloadFile,
@@ -23,7 +23,7 @@ import {
   totalPages,
 } from '../sn';
 import {todayTasks, type TaskSummary} from '../worker';
-import {describeError, logEvent, record, timed} from './report';
+import {describeError, logEvent, record, stackHint, timed} from './report';
 
 const ROOT = '/storage/emulated/0';
 export const NOTE_DIR = `${ROOT}/Note/Tana`;
@@ -57,8 +57,7 @@ const PLACEHOLDER_TASKS: TaskSummary[] = [
 /**
  * Toolbar "Today": adds a templated page to the spike notebook, writes tasks
  * on it, then closes the plugin view and opens the page. The button opens the
- * plugin view (showType 1) so the user sees progress; v0.1 showed that
- * toolbar buttons without a view never reach the plugin.
+ * plugin view (showType 1) so the user sees progress and errors.
  */
 export async function runToday(): Promise<boolean> {
   logEvent('Today: started');
@@ -79,7 +78,7 @@ export async function runToday(): Promise<boolean> {
     }
     const template = await installTemplate();
     const {page, created} = await addTodayPage(template);
-    const size = await pageSize(SPIKE_NOTE, page);
+    const size = await pageSizeOf(SPIKE_NOTE, page);
     record('device', 'info', `page ${size.width}x${size.height}, notebook page ${page}, template ${template}`);
 
     const tasks = await loadTasks();
@@ -91,7 +90,7 @@ export async function runToday(): Promise<boolean> {
     logEvent(`Today: done, showing page ${page}`);
     return true;
   } catch (e) {
-    record('q2-render', 'fail', `Today: ${describeError(e)}`);
+    record('q2-render', 'fail', `Today: ${describeError(e)}${stackHint(e)}`);
     return false;
   }
 }

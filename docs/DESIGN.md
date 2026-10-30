@@ -214,9 +214,9 @@ These parts are unchanged from v1:
   - **Today** opens the month's notebook, adds today's page if needed
     (`insertNotePage` with the "Today" template) plus one blank notes page
     (§1), renders it and jumps to it.
-  - **Sync** runs the sync and updates the header text. It opens a small
-    status view while it works: toolbar buttons without a view never reach
-    the plugin (spike Q5).
+  - **Sync** runs the sync and updates the header text. It can run without
+    a view (spike Q5); while the spike runs it opens a small status view so
+    errors are visible.
   - **Tasks** opens the task panel (§6).
 - **Lasso button → Tana:** sends a lasso selection from *any* notebook,
   following the same grammar. It lands on the day node of the date you sync it
@@ -508,19 +508,29 @@ come from your Nomad.
 
 <img src="mockups/spike-report.png" width="400" alt="Spike report panel with example values">
 
-Results from the Nomad (firmware 3.31.45, plugin v0.1, 2026-10-30):
+Results from the Nomad (firmware 3.31.45, plugins v0.1 and v0.2, 2026-10-30):
 
 - **Install:** the `.snplg` built on Linux installs via *Settings → Apps →
   Plugins → Choose Installation Package*, and the plugin panel works (Q9 yes).
-- **Q5: no** for toolbar buttons. Toolbar buttons without a view
-  (`showType: 0`) appear but never reach the plugin's button listener.
-  SuperDashboard only uses `showType: 0` for lasso and selection buttons.
-  v0.2 gives Today and Sync a status view, and keeps a separate **Ping**
-  button to confirm the result.
+- **Q1: yes.** `insertNotePage` with our own template image in `MyStyle`
+  added a page to the spike notebook.
+- **Q5: yes.** v0.1's Today and Sync had no view (`showType: 0`) and still
+  ran: Today added the templated page, and Sync started. An earlier read of
+  the report said otherwise, because both runs then stopped on an error and
+  nothing changed on screen. v0.2 and later give Today and Sync a status
+  view anyway, so progress and errors are visible.
+- **Both runs stopped on "undefined is not a function"** at the first
+  `getPageSize` call. That fits a PluginHost without that native method.
+  v0.3 checks which native methods exist and finds the page size another way
+  (`getPageDisplaySize`, else the Nomad's 1404×1872).
+- **Q4: yes.** Pen-up events arrived while writing on the page (17 in one
+  test). The plugin view is full-screen, so these all came while it was
+  closed. v0.1 counted none as "closed" because `closePluginView()` sends no
+  lifecycle change.
 - **Q6: no** AsyncStorage in PluginHost. The only native modules present are
-  BlobModule, FileReaderModule and RTNFileUtils. v0.2 adds a small native
-  file store (`TanaNative`) built into the plugin's `app.npk`, the approach
-  SuperDashboard uses.
+  BlobModule, FileReaderModule and RTNFileUtils. v0.2's own native file store
+  (`TanaNative`, built into the plugin's `app.npk`, the approach SuperDashboard
+  uses) works: settings and the report survive a restart.
 - **File permissions** have to be allowed in the plugin's settings; internet
   access was granted on first use.
 - **Finger taps** reach the plugin through the motion listener. v0.2 drops

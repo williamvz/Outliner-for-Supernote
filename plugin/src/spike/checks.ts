@@ -1,5 +1,11 @@
 import {loadConfig} from '../config';
-import {ensurePermission, PERMISSIONS, PluginManager} from '../sn';
+import {
+  ensurePermission,
+  missingNativeMethods,
+  NATIVE_METHODS,
+  PERMISSIONS,
+  PluginManager,
+} from '../sn';
 import {getJSON, nativeModuleInventory, setJSON, storageName} from '../storage';
 import {health} from '../worker';
 import {describeError, record, timed} from './report';
@@ -32,6 +38,15 @@ export async function runQuickChecks(): Promise<void> {
   } catch (e) {
     record('q6-storage', 'fail', describeError(e));
   }
+
+  const missing = missingNativeMethods();
+  record(
+    'api',
+    missing.length ? 'fail' : 'pass',
+    missing.length
+      ? `missing on this device: ${missing.join(', ')}`
+      : `all ${NATIVE_METHODS.length} native methods present`,
+  );
 
   try {
     const [deviceType, dir, name] = await Promise.all([

@@ -40,19 +40,23 @@ except one clearly marked test node, and only when you ask for it.
    file read and write (**Always allow**). Internet access is asked on first
    use.
 5. **Find the buttons.** Open any notebook. The toolbar has **Today**,
-   **Sync**, **Tana** and **Ping**.
+   **Sync**, **Tana** and **Ping**. The Tana panel also has **Today page** and
+   **Sync page** buttons that do the same as the toolbar ones.
 6. **Configure the Worker.** Tap **Tana**, then **Config**. Enter the Worker
    URL and the device passphrase and tap **Save**. They are kept across
-   restarts. Then tap **Run checks**: the network line should pass.
+   restarts. Then tap **Run checks**: the network and device API lines should
+   pass.
 7. **Create a page.** Tap **Today**. A status screen opens. The plugin
    creates `Note/Tana/Spike.note` with a templated page and up to six tasks,
-   then closes the screen and shows the page.
+   then closes the screen and shows the page. If the screen opens but nothing
+   happens, tap **Today page** on it.
 8. **Write on the page.**
    - Tick two tasks: one in the box, one by striking it through.
    - Below the line, write a few lines with dashes and indentation.
    - Write one line starting with a small box ☐.
-9. **Sync.** Tap **Sync**. The status screen shows what was read, and the
-   status line on the page updates.
+9. **Sync.** On that page, tap **Sync**. The status screen shows what was
+   read, and the status line on the page updates. If nothing happens, tap
+   **Sync page** on the screen.
 10. **Ping.** Tap **Ping** once. It opens nothing; it tests whether a button
     without a screen reaches the plugin.
 11. **Report.** Tap **Tana**, then **Send report**. The activity box at the

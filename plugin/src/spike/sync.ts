@@ -11,9 +11,8 @@ import {
   ELEMENT_TEXT,
   ensurePermission,
   modifyElements,
-  pageDisplaySize,
   pageElements,
-  pageSize,
+  pageSizeOf,
   PERMISSIONS,
   PluginCommAPI,
   recognize,
@@ -23,7 +22,7 @@ import {
 } from '../sn';
 import {sendReport} from '../worker';
 import {PAGE_STATE_KEY, type SpikePage} from './today';
-import {allFindings, describeError, eventLog, logEvent, record, timed} from './report';
+import {allFindings, describeError, eventLog, logEvent, record, stackHint, timed} from './report';
 
 /**
  * Toolbar "Sync": reads ticks and handwriting on the current page. The button
@@ -41,10 +40,7 @@ export async function runSync(): Promise<void> {
     const page = await currentPage();
     // Strokes written since the last save live only in the note's memory cache.
     await saveCurrentNote();
-    const size = await pageSize(path, page).catch(async e => {
-      logEvent(`getPageSize failed (${describeError(e)}); using getPageDisplaySize`);
-      return pageDisplaySize();
-    });
+    const size = await pageSizeOf(path, page);
     logEvent(`Sync: ${path} page ${page}, ${size.width}x${size.height}`);
     const layout = computeLayout(size.width, size.height);
 
@@ -104,9 +100,17 @@ export async function runSync(): Promise<void> {
     await updateStatus(path, page, elements, state, done.length, nodes.length);
     logEvent(`Sync: done in ${Date.now() - started} ms`);
   } catch (e) {
-    logEvent(`Sync: failed after ${Date.now() - started} ms: ${describeError(e)}`);
+    record(
+      'q3-recognize',
+      'fail',
+      `Sync failed after ${Date.now() - started} ms: ${describeError(e)}${stackHint(e)}`,
+    );
   } finally {
-    PluginCommAPI.clearElementCache();
+    try {
+      PluginCommAPI.clearElementCache();
+    } catch (e) {
+      logEvent(`clearElementCache: ${describeError(e)}`);
+    }
   }
   try {
     await sendReport({findings: allFindings(), log: eventLog(), sentAt: new Date().toISOString()});

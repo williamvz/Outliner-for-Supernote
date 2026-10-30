@@ -6,6 +6,7 @@ import {AppRegistry, Image} from 'react-native';
 import {PluginManager} from 'sn-plugin-lib';
 import App from './App';
 import {name as appName} from './app.json';
+import {version} from './package.json';
 import {show} from './src/nav';
 import {logEvent, record, loadSaved} from './src/spike/report';
 import {runSync} from './src/spike/sync';
@@ -27,10 +28,11 @@ AppRegistry.registerComponent(appName, () => App);
 
 PluginManager.init();
 loadSaved();
+logEvent(`plugin loaded, v${version}`);
 
-// Today and Sync open the plugin view: v0.1 showed that toolbar buttons
-// without a view (showType 0) never reached the plugin. Ping keeps showType 0
-// on purpose, to test that once more with nothing else involved.
+// Today and Sync open the plugin view so progress and errors are visible.
+// Ping keeps showType 0: v0.1's Today and Sync ran without a view, and Ping
+// confirms that with nothing else involved.
 PluginManager.registerButton(TOOLBAR, ['NOTE'], {
   id: BUTTON_TODAY,
   name: 'Today',
@@ -84,6 +86,7 @@ PluginManager.registerButtonListener({
 PluginManager.registerConfigButton();
 PluginManager.registerConfigButtonListener({
   onClick() {
+    logEvent('config button');
     show('config');
     PluginManager.showPluginView();
   },

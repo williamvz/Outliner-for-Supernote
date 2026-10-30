@@ -36,6 +36,7 @@ export const QUESTIONS: Array<Pick<Finding, 'id' | 'title'>> = [
   {id: 'ticks', title: 'Ticks read from the task zone'},
   {id: 'outline', title: 'Handwriting → outline nodes'},
   {id: 'header', title: 'Update header text in place'},
+  {id: 'api', title: 'Device API methods the plugin needs'},
   {id: 'device', title: 'Device facts'},
 ];
 
@@ -105,4 +106,10 @@ export async function timed<T>(fn: () => Promise<T>): Promise<{value: T; ms: num
 
 export function describeError(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
+}
+
+/** The first frames of a stack trace, to find the failing call on the device. */
+export function stackHint(e: unknown): string {
+  const frames = e instanceof Error && e.stack ? e.stack.split('\n').slice(1, 4) : [];
+  return frames.length ? ` @ ${frames.map(f => f.trim()).join(' < ')}` : '';
 }

@@ -4,6 +4,8 @@ import {PluginManager} from 'sn-plugin-lib';
 import {loadConfig, saveConfig} from './src/config';
 import {currentScreen, onScreen, show, type Screen} from './src/nav';
 import {runQuickChecks} from './src/spike/checks';
+import {runSync} from './src/spike/sync';
+import {runToday} from './src/spike/today';
 import {
   allFindings,
   describeError,
@@ -16,7 +18,9 @@ import {sendReport} from './src/worker';
 
 /**
  * Plugin panel for the M0 spike: the findings report and the config form.
- * E-ink rules: black on white, no animations, no press feedback.
+ * Today and Sync are here as well as on the toolbar, so a lost button event
+ * doesn't block a test. E-ink rules: black on white, no animations, no press
+ * feedback.
  */
 function App(): React.JSX.Element {
   const [screen, setScreen] = useState<Screen>(currentScreen());
@@ -70,6 +74,8 @@ function ReportScreen() {
     <>
       <Text style={styles.title}>Tana Sync · spike report</Text>
       <View style={styles.row}>
+        <Button label="Today page" onPress={() => run('Today', runToday)} />
+        <Button label="Sync page" onPress={() => run('Sync', runSync)} />
         <Button label="Run checks" onPress={() => run('Checks', runQuickChecks)} />
         <Button
           label="Send report"
