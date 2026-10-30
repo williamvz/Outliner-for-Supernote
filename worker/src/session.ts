@@ -21,6 +21,8 @@ import {FIELDS, taskFromNode, todayView, type Task} from './tasks';
 const SNAPSHOT_MAX_AGE_MS = 10 * 60 * 1000;
 const DOMAIN_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const READ_CONCURRENCY = 6;
+// v2: v1 cached the first workspace with a #task tag, which can be the wrong one.
+const WORKSPACE_KEY = 'tana.workspace.v2';
 
 interface Pending {
   state: string;
@@ -30,6 +32,7 @@ interface Pending {
 
 interface Workspace {
   workspaceId: string;
+  workspaceName: string;
   taskTagId: string;
 }
 
@@ -195,36 +198,70 @@ export class TanaSession extends DurableObject<Env> {
 
   // ---- Tasks -------------------------------------------------------------
 
+  /**
+   * The workspace whose #task tag has the most open tasks, unless
+   * TANA_WORKSPACE_ID pins one. Several workspaces can have a #task tag
+   * (e.g. a sample workspace), so the first match is not good enough.
+   */
   private async workspace(): Promise<Workspace> {
-    const cached = await this.ctx.storage.get<Workspace>('tana.workspace');
+    const cached = await this.ctx.storage.get<Workspace>(WORKSPACE_KEY);
     if (cached) {
       return cached;
     }
     const wanted = this.env.TASK_TAG.toLowerCase();
-    const candidates = this.env.TANA_WORKSPACE_ID
-      ? [this.env.TANA_WORKSPACE_ID]
-      : (
-          await this.withMcp(m => m.callTool<Array<{id: string}>>('list_workspaces', {}))
-        ).map(w => w.id);
-    for (const workspaceId of candidates) {
+    const all = await this.withMcp(m =>
+      m.callTool<Array<{id: string; name: string}>>('list_workspaces', {}),
+    );
+    const pinned = this.env.TANA_WORKSPACE_ID;
+    const candidates = pinned
+      ? [all.find(w => w.id === pinned) ?? {id: pinned, name: pinned}]
+      : all;
+
+    let best: {ws: Workspace; open: number} | null = null;
+    for (const candidate of candidates) {
       const tags = await this.withMcp(m =>
-        m.callTool<Array<{id: string; name: string}>>('list_tags', {workspaceId, limit: 500}),
+        m.callTool<Array<{id: string; name: string}>>('list_tags', {
+          workspaceId: candidate.id,
+          limit: 500,
+        }),
       );
       const tag = tags.find(t => t.name.toLowerCase() === wanted);
-      if (tag) {
-        const ws = {workspaceId, taskTagId: tag.id};
-        await this.ctx.storage.put('tana.workspace', ws);
-        return ws;
+      if (!tag) {
+        continue;
+      }
+      const open = (await this.searchOpenTasks(candidate.id, tag.id)).length;
+      if (!best || open > best.open) {
+        best = {
+          ws: {workspaceId: candidate.id, workspaceName: candidate.name, taskTagId: tag.id},
+          open,
+        };
       }
     }
-    throw new Error(`no workspace has a #${this.env.TASK_TAG} tag`);
+    if (!best) {
+      throw new Error(`no workspace has a #${this.env.TASK_TAG} tag`);
+    }
+    await this.ctx.storage.put(WORKSPACE_KEY, best.ws);
+    return best.ws;
+  }
+
+  private async searchOpenTasks(workspaceId: string, taskTagId: string): Promise<SearchHit[]> {
+    const found = await this.withMcp(m =>
+      m.callTool<SearchHit[]>('search_nodes', {
+        query: {and: [{hasType: taskTagId}, {not: {is: 'done'}}]},
+        workspaceIds: [workspaceId],
+        limit: 1000,
+      }),
+    );
+    return found.filter(h => (h.docType ?? 'content') === 'content' && !h.inTrash);
   }
 
   private async tasks(url: URL) {
     const today = todayIn(this.env.TIMEZONE);
     let snapshot = await this.ctx.storage.get<Snapshot>('tasks.snapshot');
+    const {workspaceId} = await this.workspace();
     const stale =
       !snapshot ||
+      snapshot.workspaceId !== workspaceId ||
       snapshot.today !== today ||
       Date.now() - Date.parse(snapshot.generatedAt) > SNAPSHOT_MAX_AGE_MS;
     if (stale || url.searchParams.get('fresh') === '1') {
@@ -238,14 +275,7 @@ export class TanaSession extends DurableObject<Env> {
   private async buildSnapshot(today: string): Promise<Snapshot> {
     const {workspaceId, taskTagId} = await this.workspace();
     const t0 = Date.now();
-    const found = await this.withMcp(m =>
-      m.callTool<SearchHit[]>('search_nodes', {
-        query: {and: [{hasType: taskTagId}, {not: {is: 'done'}}]},
-        workspaceIds: [workspaceId],
-        limit: 1000,
-      }),
-    );
-    const hits = found.filter(h => (h.docType ?? 'content') === 'content' && !h.inTrash);
+    const hits = await this.searchOpenTasks(workspaceId, taskTagId);
     const t1 = Date.now();
     const tasks = (
       await mapLimit(hits, READ_CONCURRENCY, async hit => {
@@ -307,9 +337,11 @@ export class TanaSession extends DurableObject<Env> {
   private async health() {
     const tokens = await this.ctx.storage.get<Tokens>('oauth.tokens');
     const snapshot = await this.ctx.storage.get<Snapshot>('tasks.snapshot');
+    const ws = await this.ctx.storage.get<Workspace>(WORKSPACE_KEY);
     return {
       ok: true,
       tana: tokens ? 'linked' : 'not linked',
+      workspace: ws?.workspaceName ?? null,
       snapshotAgeSeconds: snapshot
         ? Math.round((Date.now() - Date.parse(snapshot.generatedAt)) / 1000)
         : null,
@@ -332,7 +364,7 @@ export class TanaSession extends DurableObject<Env> {
     return {
       tools,
       listToolsMs: t1 - t0,
-      workspaceFound: Boolean(ws.workspaceId),
+      workspace: ws.workspaceName,
       snapshot: {
         tasks: snapshot.tasks.length,
         recurring: snapshot.tasks.filter(t => t.recurring).length,
