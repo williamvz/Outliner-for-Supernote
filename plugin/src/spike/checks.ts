@@ -8,11 +8,13 @@ import {describeError, record, timed} from './report';
 export async function runQuickChecks(): Promise<void> {
   const perms: string[] = [];
   for (const [name, permission] of Object.entries(PERMISSIONS)) {
-    perms.push(`${name}=${await ensurePermission(permission, 'Tana sync spike')}`);
+    const has = await PluginManager.hasPermission(permission);
+    const granted = await ensurePermission(permission, 'Tana sync spike');
+    perms.push(`${name}=${granted} (has=${has})`);
   }
   record(
     'permissions',
-    perms.every(p => p.endsWith('true')) ? 'pass' : 'fail',
+    perms.every(p => p.includes('=true')) ? 'pass' : 'fail',
     perms.join(', '),
   );
 

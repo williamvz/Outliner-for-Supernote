@@ -214,8 +214,9 @@ These parts are unchanged from v1:
   - **Today** opens the month's notebook, adds today's page if needed
     (`insertNotePage` with the "Today" template) plus one blank notes page
     (§1), renders it and jumps to it.
-  - **Sync** has no UI (`showType: 0`). It runs the sync in the background and
-    updates the header text.
+  - **Sync** runs the sync and updates the header text. It opens a small
+    status view while it works: toolbar buttons without a view never reach
+    the plugin (spike Q5).
   - **Tasks** opens the task panel (§6).
 - **Lasso button → Tana:** sends a lasso selection from *any* notebook,
   following the same grammar. It lands on the day node of the date you sync it
@@ -253,9 +254,9 @@ These parts are unchanged from v1:
   lines (strokes → Tana node id and status).
 - **Task cache:** the last snapshot from `GET /tasks`.
 - **Outbox:** operations, each with a client `opId` so replays are harmless.
-- **Storage:** AsyncStorage, a native module that the plugin build script
-  packages. If it isn't available, any React Native file library works.
-  Checked in the spike.
+- **Storage:** JSON files in the plugin's private directory, written by a
+  small native module of our own (`TanaNative`). PluginHost has no
+  AsyncStorage (spike Q6).
 
 ### 5.5 Sync
 
@@ -495,7 +496,7 @@ Deploying the Worker is a manual `wrangler deploy`.
 | 3 | Do `getElements` + `recognizeElements` **per line** give usable text for your handwriting, Dutch and English? | Rely more on Claude with the page PNG. |
 | 4 | Does the **pen-up listener** fire while the plugin's UI is closed (auto-sync, instant tick detection)? | Sync button only. |
 | 5 | Can a **toolbar button with no UI** (`showType: 0`) run the whole sync in the background? | The Sync button briefly opens a tiny status panel. |
-| 6 | Is **AsyncStorage** (a native module) packaged and working inside PluginHost? | Another React Native file library. |
+| 6 | Is **AsyncStorage** (a native module) packaged and working inside PluginHost? | Our own native file module (chosen, see below). |
 | 7 | Does `import_tana_paste` on the hosted MCP **return the new node ids**? | Read the day node's children after import and match by text. |
 | 8 | Can our Worker **complete Tana's OAuth** as a non-Claude client, and how long do refresh tokens live? | Re-link from a phone when needed. The plugin shows "Re-link Tana". |
 | 9 | Does the CI build of `.snplg` on Linux install and run on the device? | Build on a macOS runner. |
@@ -506,6 +507,25 @@ PASS, FAIL or INFO. The values in this mockup are examples; the real ones
 come from your Nomad.
 
 <img src="mockups/spike-report.png" width="400" alt="Spike report panel with example values">
+
+Results from the Nomad (firmware 3.31.45, plugin v0.1, 2026-10-30):
+
+- **Install:** the `.snplg` built on Linux installs via *Settings → Apps →
+  Plugins → Choose Installation Package*, and the plugin panel works (Q9 yes).
+- **Q5: no** for toolbar buttons. Toolbar buttons without a view
+  (`showType: 0`) appear but never reach the plugin's button listener.
+  SuperDashboard only uses `showType: 0` for lasso and selection buttons.
+  v0.2 gives Today and Sync a status view, and keeps a separate **Ping**
+  button to confirm the result.
+- **Q6: no** AsyncStorage in PluginHost. The only native modules present are
+  BlobModule, FileReaderModule and RTNFileUtils. v0.2 adds a small native
+  file store (`TanaNative`) built into the plugin's `app.npk`, the approach
+  SuperDashboard uses.
+- **File permissions** have to be allowed in the plugin's settings; internet
+  access was granted on first use.
+- **Finger taps** reach the plugin through the motion listener. v0.2 drops
+  the always-on listener anyway: SuperDashboard reports that global motion
+  capture during page edits can freeze the device.
 
 Partial answers from before the device test (2026-10-29):
 

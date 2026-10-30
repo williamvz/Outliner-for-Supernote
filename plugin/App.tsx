@@ -4,7 +4,14 @@ import {PluginManager} from 'sn-plugin-lib';
 import {loadConfig, saveConfig} from './src/config';
 import {currentScreen, onScreen, show, type Screen} from './src/nav';
 import {runQuickChecks} from './src/spike/checks';
-import {allFindings, describeError, onChange, record, type Finding} from './src/spike/report';
+import {
+  allFindings,
+  describeError,
+  eventLog,
+  onChange,
+  record,
+  type Finding,
+} from './src/spike/report';
 import {sendReport} from './src/worker';
 
 /**
@@ -38,8 +45,16 @@ const MARK: Record<Finding['status'], string> = {
 
 function ReportScreen() {
   const [findings, setFindings] = useState(allFindings());
+  const [log, setLog] = useState(eventLog());
   const [busy, setBusy] = useState('');
-  useEffect(() => onChange(() => setFindings(allFindings())), []);
+  useEffect(
+    () =>
+      onChange(() => {
+        setFindings(allFindings());
+        setLog(eventLog());
+      }),
+    [],
+  );
 
   const run = async (label: string, fn: () => Promise<unknown>) => {
     setBusy(`${label}…`);
@@ -60,7 +75,11 @@ function ReportScreen() {
           label="Send report"
           onPress={() =>
             run('Send', () =>
-              sendReport({findings: allFindings(), sentAt: new Date().toISOString()}).then(() =>
+              sendReport({
+                findings: allFindings(),
+                log: eventLog(),
+                sentAt: new Date().toISOString(),
+              }).then(() =>
                 record('net', 'pass', 'report uploaded'),
               ),
             )
@@ -70,6 +89,13 @@ function ReportScreen() {
         <Button label="Close" onPress={() => PluginManager.closePluginView()} />
       </View>
       {busy ? <Text style={styles.busy}>{busy}</Text> : null}
+      <View style={styles.activity}>
+        {log.slice(-6).map(entry => (
+          <Text key={entry.at + entry.msg} style={styles.logLine} numberOfLines={1}>
+            {entry.at.slice(11, 19)}  {entry.msg}
+          </Text>
+        ))}
+      </View>
       <ScrollView style={styles.list}>
         {findings.map(f => (
           <View key={f.id} style={styles.finding}>
@@ -145,6 +171,8 @@ const styles = StyleSheet.create({
   },
   buttonText: {fontSize: 26, color: '#000000'},
   busy: {fontSize: 24, color: '#000000', marginBottom: 12},
+  activity: {borderWidth: 2, borderColor: '#000000', padding: 10, marginBottom: 12},
+  logLine: {fontSize: 20, color: '#000000'},
   list: {flex: 1},
   finding: {borderTopWidth: 1, borderColor: '#000000', paddingVertical: 12},
   findingTitle: {fontSize: 26, fontWeight: 'bold', color: '#000000'},

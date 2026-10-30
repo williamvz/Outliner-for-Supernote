@@ -7,6 +7,7 @@ import {
   type Element,
 } from 'sn-plugin-lib';
 import type {Point, StrokeShape} from './core/geometry';
+import {logEvent} from './spike/report';
 
 /**
  * Thin typed layer over sn-plugin-lib. The SDK's declarations mostly say
@@ -46,12 +47,17 @@ export const PERMISSIONS = {
   internet: 'plugin.permission.INTERNET',
 } as const;
 
-/** 1 = granted (this time or always), 0 = not granted. Asks when needed. */
+/**
+ * hasPermission: 1 = granted. requestPermission: 1 = this session, 2 = always,
+ * 0 = denied, -1 = dialog dismissed. Raw codes go to the spike log.
+ */
 export async function ensurePermission(permission: string, why: string): Promise<boolean> {
-  if ((await PluginManager.hasPermission(permission)) === 1) {
+  const has = await PluginManager.hasPermission(permission);
+  if (has === 1) {
     return true;
   }
   const answer = await PluginManager.requestPermission(permission, why);
+  logEvent(`permission ${permission}: has=${has} request=${answer}`);
   return answer === 1 || answer === 2;
 }
 
@@ -61,6 +67,12 @@ export const currentPage = () =>
   call<number>('getCurrentPageNum', PluginCommAPI.getCurrentPageNum());
 export const pageSize = (path: string, page: number) =>
   call<{width: number; height: number}>('getPageSize', PluginFileAPI.getPageSize(path, page));
+/** Current page only; deprecated but needs no FILE:READ. A fallback for getPageSize. */
+export const pageDisplaySize = () =>
+  call<{width: number; height: number}>('getPageDisplaySize', PluginCommAPI.getPageDisplaySize());
+/** File-level reads and writes see the open note only after it is saved. */
+export const saveCurrentNote = () =>
+  call<boolean>('saveCurrentNote', PluginNoteAPI.saveCurrentNote());
 export const pageElements = (path: string, page: number) =>
   call<Element[]>('getElements', PluginFileAPI.getElements(page, path));
 export const totalPages = (path: string) =>
