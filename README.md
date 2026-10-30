@@ -58,7 +58,8 @@ cd worker
 npm ci
 npx wrangler login
 npx wrangler deploy
-printf '%s' 'four random words here' | sha256sum | cut -d' ' -f1 | npx wrangler secret put DEVICE_TOKEN_HASH
+# sha256 of the passphrase (macOS: shasum -a 256, Linux: sha256sum)
+printf '%s' 'four random words here' | shasum -a 256 | cut -d' ' -f1 | npx wrangler secret put DEVICE_TOKEN_HASH
 ```
 
 To link Tana, open `https://<worker-host>/oauth/start?token=<passphrase>` in a
