@@ -9,4 +9,6 @@ export interface Env {
   TASK_TAG: string;
   RECURRING_TAG: string;
   TANA_WORKSPACE_ID?: string;
+  /** Local testing against a mock MCP server only; never set in production. */
+  DEV_TANA_ACCESS_TOKEN?: string;
 }

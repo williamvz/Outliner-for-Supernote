@@ -23,6 +23,15 @@ const DOMAIN_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const READ_CONCURRENCY = 6;
 // v2: v1 cached the first workspace with a #task tag, which can be the wrong one.
 const WORKSPACE_KEY = 'tana.workspace.v2';
+const SNAPSHOT_KEY = 'tasks.snapshot.v2';
+const JOB_KEY = 'tasks.job';
+const LAST_ERROR_KEY = 'tasks.lastError';
+// Cloudflare's free plan allows 50 outbound requests per invocation. A
+// snapshot needs one read per task and per area, so it is built over several
+// alarm invocations. The margin covers a token refresh or MCP re-initialise.
+const CALLS_PER_STEP = 35;
+const JOB_STALE_MS = 5 * 60 * 1000;
+const MAX_STEP_FAILURES = 3;
 
 interface Pending {
   state: string;
@@ -41,7 +50,21 @@ interface Snapshot {
   today: string;
   workspaceId: string;
   tasks: Task[];
-  stats: {searchMs: number; readMs: number; domainMs: number; found: number};
+  stats: {found: number; steps: number; buildMs: number};
+}
+
+/** A snapshot being built, one batch of MCP calls per alarm. */
+interface Job {
+  today: string;
+  workspaceId: string;
+  startedAt: number;
+  found: number;
+  pending: SearchHit[];
+  tasks: Task[];
+  steps: number;
+  lastStepRequests: number;
+  failures: number;
+  lastError: string | null;
 }
 
 interface SearchHit {
@@ -152,6 +175,9 @@ export class TanaSession extends DurableObject<Env> {
   }
 
   private async accessToken(): Promise<string> {
+    if (this.env.DEV_TANA_ACCESS_TOKEN) {
+      return this.env.DEV_TANA_ACCESS_TOKEN;
+    }
     const tokens = await this.ctx.storage.get<Tokens>('oauth.tokens');
     if (!tokens) {
       throw new ReauthRequired('Tana is not linked yet: open /oauth/start');
@@ -255,47 +281,116 @@ export class TanaSession extends DurableObject<Env> {
     return found.filter(h => (h.docType ?? 'content') === 'content' && !h.inTrash);
   }
 
+  /**
+   * Serves the last complete snapshot right away and starts a background
+   * refresh when it is missing, stale or ?fresh=1. Until the first snapshot
+   * exists the list is empty and `refreshing` shows the progress.
+   */
   private async tasks(url: URL) {
     const today = todayIn(this.env.TIMEZONE);
-    let snapshot = await this.ctx.storage.get<Snapshot>('tasks.snapshot');
-    const {workspaceId} = await this.workspace();
+    const ws = await this.workspace();
+    const stored = await this.ctx.storage.get<Snapshot>(SNAPSHOT_KEY);
+    const snapshot = stored?.workspaceId === ws.workspaceId ? stored : null;
     const stale =
       !snapshot ||
-      snapshot.workspaceId !== workspaceId ||
       snapshot.today !== today ||
       Date.now() - Date.parse(snapshot.generatedAt) > SNAPSHOT_MAX_AGE_MS;
     if (stale || url.searchParams.get('fresh') === '1') {
-      snapshot = await this.buildSnapshot(today);
+      await this.startRefresh(today, ws);
     }
+    const job = await this.ctx.storage.get<Job>(JOB_KEY);
     const view = url.searchParams.get('view') ?? 'all';
-    const tasks = view === 'today' ? todayView(snapshot!.tasks, today) : snapshot!.tasks;
-    return {generatedAt: snapshot!.generatedAt, today, view, count: tasks.length, tasks};
+    const list = snapshot ? (view === 'today' ? todayView(snapshot.tasks, today) : snapshot.tasks) : [];
+    return {
+      generatedAt: snapshot?.generatedAt ?? null,
+      today,
+      view,
+      refreshing: job ? progress(job) : null,
+      count: list.length,
+      tasks: list,
+    };
   }
 
-  private async buildSnapshot(today: string): Promise<Snapshot> {
-    const {workspaceId, taskTagId} = await this.workspace();
-    const t0 = Date.now();
-    const hits = await this.searchOpenTasks(workspaceId, taskTagId);
-    const t1 = Date.now();
-    const tasks = (
-      await mapLimit(hits, READ_CONCURRENCY, async hit => {
+  private async startRefresh(today: string, ws: Workspace): Promise<void> {
+    const running = await this.ctx.storage.get<Job>(JOB_KEY);
+    if (running && Date.now() - running.startedAt < JOB_STALE_MS) {
+      return;
+    }
+    const pending = await this.searchOpenTasks(ws.workspaceId, ws.taskTagId);
+    const job: Job = {
+      today,
+      workspaceId: ws.workspaceId,
+      startedAt: Date.now(),
+      found: pending.length,
+      pending,
+      tasks: [],
+      steps: 0,
+      lastStepRequests: 0,
+      failures: 0,
+      lastError: null,
+    };
+    await this.ctx.storage.put(JOB_KEY, job);
+    await this.ctx.storage.setAlarm(Date.now());
+  }
+
+  /** Each alarm is a fresh invocation with its own outbound-request budget. */
+  async alarm(): Promise<void> {
+    const job = await this.ctx.storage.get<Job>(JOB_KEY);
+    if (!job) {
+      return;
+    }
+    this.mcp ??= new McpClient(this.env.TANA_MCP_URL, () => this.accessToken());
+    const before = this.mcp.requests;
+    try {
+      const done = await this.step(job);
+      job.steps++;
+      job.lastStepRequests = this.mcp.requests - before;
+      if (done) {
+        const snapshot: Snapshot = {
+          generatedAt: new Date().toISOString(),
+          today: job.today,
+          workspaceId: job.workspaceId,
+          tasks: job.tasks,
+          stats: {found: job.found, steps: job.steps, buildMs: Date.now() - job.startedAt},
+        };
+        await this.ctx.storage.put(SNAPSHOT_KEY, snapshot);
+        await this.ctx.storage.delete([JOB_KEY, LAST_ERROR_KEY]);
+        return;
+      }
+      await this.ctx.storage.put(JOB_KEY, job);
+      await this.ctx.storage.setAlarm(Date.now());
+    } catch (e) {
+      job.failures++;
+      job.lastError = e instanceof Error ? e.message : String(e);
+      if (e instanceof ReauthRequired || job.failures >= MAX_STEP_FAILURES) {
+        await this.ctx.storage.put(LAST_ERROR_KEY, {at: new Date().toISOString(), error: job.lastError});
+        await this.ctx.storage.delete(JOB_KEY);
+        return;
+      }
+      await this.ctx.storage.put(JOB_KEY, job);
+      await this.ctx.storage.setAlarm(Date.now() + 30_000);
+    }
+  }
+
+  /** Reads up to CALLS_PER_STEP task nodes, then resolves domains. True when finished. */
+  private async step(job: Job): Promise<boolean> {
+    let budget = CALLS_PER_STEP;
+    if (job.pending.length) {
+      const batch = job.pending.slice(0, budget);
+      const read = await mapLimit(batch, READ_CONCURRENCY, async hit => {
         const node = await this.readNode(hit.id);
         return node.checked === true
           ? null
-          : taskFromNode(node, hit.id, hit.breadcrumb ?? [], today, this.env.RECURRING_TAG);
-      })
-    ).filter((t): t is Task => t !== null);
-    const t2 = Date.now();
-    await this.resolveDomains(tasks);
-    const snapshot: Snapshot = {
-      generatedAt: new Date().toISOString(),
-      today,
-      workspaceId,
-      tasks,
-      stats: {searchMs: t1 - t0, readMs: t2 - t1, domainMs: Date.now() - t2, found: hits.length},
-    };
-    await this.ctx.storage.put('tasks.snapshot', snapshot);
-    return snapshot;
+          : taskFromNode(node, hit.id, hit.breadcrumb ?? [], job.today, this.env.RECURRING_TAG);
+      });
+      job.pending = job.pending.slice(batch.length);
+      job.tasks.push(...read.filter((t): t is Task => t !== null));
+      budget -= batch.length;
+      if (job.pending.length) {
+        return false;
+      }
+    }
+    return this.resolveDomains(job.tasks, budget);
   }
 
   private async readNode(nodeId: string) {
@@ -305,20 +400,35 @@ export class TanaSession extends DurableObject<Env> {
     return parseNodeMarkdown(typeof res === 'string' ? res : res.markdown);
   }
 
-  /** task → area or project → (project's Parent Area) → area's Domain. */
-  private async resolveDomains(tasks: Task[]): Promise<void> {
+  /**
+   * task → area or project → (project's Parent Area) → area's Domain, cached
+   * for a day. Reads at most `budget` nodes; returns false when some parents
+   * still need reading.
+   */
+  private async resolveDomains(tasks: Task[], budget: number): Promise<boolean> {
     const cache = (await this.ctx.storage.get<DomainCache>('domains')) ?? {};
     const fresh = (id: string) => cache[id] && Date.now() - cache[id].at < DOMAIN_MAX_AGE_MS;
+    let reads = 0;
+    let complete = true;
 
-    const domainOf = async (id: string, depth = 0): Promise<string | null> => {
+    // undefined = not resolved within the budget
+    const domainOf = async (id: string, depth = 0): Promise<string | null | undefined> => {
       if (fresh(id)) {
         return cache[id].domain;
       }
+      if (reads >= budget) {
+        complete = false;
+        return undefined;
+      }
+      reads++;
       const node = await this.readNode(id);
-      let domain: string | null = node.fields[FIELDS.domain]?.refs[0]?.name ?? null;
+      let domain: string | null | undefined = node.fields[FIELDS.domain]?.refs[0]?.name ?? null;
       const parentArea = node.fields[FIELDS.parentArea]?.refs[0]?.id;
       if (!domain && parentArea && depth < 2) {
         domain = await domainOf(parentArea, depth + 1);
+        if (domain === undefined) {
+          return undefined;
+        }
       }
       cache[id] = {domain, at: Date.now()};
       return domain;
@@ -330,14 +440,16 @@ export class TanaSession extends DurableObject<Env> {
       task.domain = task.parentId ? cache[task.parentId]?.domain ?? null : null;
     }
     await this.ctx.storage.put('domains', cache);
+    return complete;
   }
 
   // ---- Spike helpers -----------------------------------------------------
 
   private async health() {
     const tokens = await this.ctx.storage.get<Tokens>('oauth.tokens');
-    const snapshot = await this.ctx.storage.get<Snapshot>('tasks.snapshot');
+    const snapshot = await this.ctx.storage.get<Snapshot>(SNAPSHOT_KEY);
     const ws = await this.ctx.storage.get<Workspace>(WORKSPACE_KEY);
+    const job = await this.ctx.storage.get<Job>(JOB_KEY);
     return {
       ok: true,
       tana: tokens ? 'linked' : 'not linked',
@@ -345,6 +457,8 @@ export class TanaSession extends DurableObject<Env> {
       snapshotAgeSeconds: snapshot
         ? Math.round((Date.now() - Date.parse(snapshot.generatedAt)) / 1000)
         : null,
+      refreshing: job ? progress(job) : null,
+      lastError: (await this.ctx.storage.get(LAST_ERROR_KEY)) ?? null,
     };
   }
 
@@ -355,24 +469,37 @@ export class TanaSession extends DurableObject<Env> {
     return {ok: true};
   }
 
+  /** Summary of the current snapshot; GET /tasks?fresh=1 starts a rebuild. */
   private async diagnostics() {
     const t0 = Date.now();
     const tools = await this.withMcp(m => m.listTools());
     const t1 = Date.now();
     const ws = await this.workspace();
-    const snapshot = await this.buildSnapshot(todayIn(this.env.TIMEZONE));
+    const snapshot = await this.ctx.storage.get<Snapshot>(SNAPSHOT_KEY);
+    const job = await this.ctx.storage.get<Job>(JOB_KEY);
+    const today = todayIn(this.env.TIMEZONE);
     return {
-      tools,
+      tools: tools.length,
       listToolsMs: t1 - t0,
       workspace: ws.workspaceName,
-      snapshot: {
-        tasks: snapshot.tasks.length,
-        recurring: snapshot.tasks.filter(t => t.recurring).length,
-        withDeadline: snapshot.tasks.filter(t => t.deadline).length,
-        withDomain: snapshot.tasks.filter(t => t.domain).length,
-        today: todayView(snapshot.tasks, snapshot.today).length,
-        ...snapshot.stats,
-      },
+      refreshing: job ? progress(job) : null,
+      lastError: (await this.ctx.storage.get(LAST_ERROR_KEY)) ?? null,
+      snapshot: snapshot
+        ? {
+            generatedAt: snapshot.generatedAt,
+            tasks: snapshot.tasks.length,
+            recurring: snapshot.tasks.filter(t => t.recurring).length,
+            withDeadline: snapshot.tasks.filter(t => t.deadline).length,
+            withPriority: snapshot.tasks.filter(t => t.priority).length,
+            someday: snapshot.tasks.filter(t => t.someday).length,
+            home: snapshot.tasks.filter(t => t.domain === 'Home').length,
+            work: snapshot.tasks.filter(t => t.domain === 'Work').length,
+            noDomain: snapshot.tasks.filter(t => !t.domain).length,
+            onDayNode: snapshot.tasks.filter(t => t.onDayNode).length,
+            today: todayView(snapshot.tasks, today).length,
+            ...snapshot.stats,
+          }
+        : null,
     };
   }
 
@@ -399,6 +526,17 @@ export class TanaSession extends DurableObject<Env> {
     );
     return {day, dayId, importResult: result};
   }
+}
+
+function progress(job: Job) {
+  return {
+    read: job.found - job.pending.length,
+    of: job.found,
+    steps: job.steps,
+    lastStepRequests: job.lastStepRequests,
+    failures: job.failures,
+    lastError: job.lastError,
+  };
 }
 
 async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {

@@ -88,3 +88,18 @@ python3 tools/make_template.py      # after changing src/core/layout.json
 cd ../worker && npm ci
 npm test && npm run typecheck
 ```
+
+To run the Worker locally against a stand-in Tana (130 tasks, two workspaces):
+
+```sh
+node scripts/mock-mcp.mjs &
+npx wrangler dev --var TANA_MCP_URL:http://127.0.0.1:8788/mcp --var DEV_TANA_ACCESS_TOKEN:dev \
+  --var DEVICE_TOKEN_HASH:$(printf '%s' test | shasum -a 256 | cut -d' ' -f1)
+curl -H 'authorization: Bearer test' 'localhost:8787/tasks?view=today'
+```
+
+The task list is built in the background, in batches of 35 calls to Tana:
+Cloudflare's free plan allows 50 outbound requests per Worker invocation. The
+first `/tasks` call returns an empty list with `refreshing` progress. Later
+calls return the finished snapshot, which is refreshed when it is older than
+10 minutes.

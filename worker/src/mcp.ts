@@ -24,6 +24,8 @@ export class McpClient {
   private sessionId: string | null = null;
   private initialized = false;
   private nextId = 1;
+  /** HTTP requests sent so far; the Worker budgets these per invocation. */
+  requests = 0;
 
   constructor(
     private readonly url: string,
@@ -80,6 +82,7 @@ export class McpClient {
     if (this.sessionId) {
       headers['mcp-session-id'] = this.sessionId;
     }
+    this.requests++;
     const res = await fetch(this.url, {method: 'POST', headers, body: JSON.stringify(message)});
     if (res.status === 401) {
       throw new UnauthorizedError('Tana rejected the access token', 401);
