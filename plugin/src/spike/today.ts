@@ -23,7 +23,7 @@ import {
   totalPages,
 } from '../sn';
 import {todayTasks, type TaskSummary} from '../worker';
-import {describeError, logEvent, record, stackHint, timed} from './report';
+import {describeError, logEvent, record, stackHint, step, timed} from './report';
 
 const ROOT = '/storage/emulated/0';
 export const NOTE_DIR = `${ROOT}/Note/Tana`;
@@ -70,23 +70,22 @@ export async function runToday(): Promise<boolean> {
       return false;
     }
 
-    const open = await currentFilePath().catch(() => '');
+    const open = await step('open file path', () => currentFilePath().catch(() => ''));
     if (open === SPIKE_NOTE) {
       // File-level edits of the open note need its in-memory changes saved first.
-      await saveCurrentNote();
-      logEvent('Today: saved the open spike note first');
+      await step('save open note', saveCurrentNote);
     }
-    const template = await installTemplate();
-    const {page, created} = await addTodayPage(template);
-    const size = await pageSizeOf(SPIKE_NOTE, page);
+    const template = await step('install template', installTemplate);
+    const {page, created} = await step('add page', () => addTodayPage(template));
+    const size = await step('page size', () => pageSizeOf(SPIKE_NOTE, page));
     record('device', 'info', `page ${size.width}x${size.height}, notebook page ${page}, template ${template}`);
 
-    const tasks = await loadTasks();
-    const state = await renderPage(page, size, tasks);
-    await setJSON(PAGE_STATE_KEY, state);
+    const tasks = await step('load tasks', loadTasks);
+    const state = await step('render page', () => renderPage(page, size, tasks));
+    await step('save page state', () => setJSON(PAGE_STATE_KEY, state));
 
-    await PluginManager.closePluginView();
-    await show(page, created, open);
+    await step('close plugin view', () => PluginManager.closePluginView());
+    await step('open page', () => show(page, created, open));
     logEvent(`Today: done, showing page ${page}`);
     return true;
   } catch (e) {
@@ -158,16 +157,19 @@ async function renderPage(
   size: {width: number; height: number},
   tasks: TaskSummary[],
 ): Promise<SpikePage> {
-  const layout = computeLayout(size.width, size.height);
+  const layout = await step('compute layout', () => computeLayout(size.width, size.height));
   const shown = tasks.slice(0, layout.rows.length);
-  const boxes: Box[] = [
-    {rect: layout.headerDate, text: dayLabel(new Date()), fontSize: 44, bold: true, role: 'other'},
-    {rect: layout.headerStatus, text: 'Spike · not synced', fontSize: 30, align: 2, role: 'status'},
-  ];
-  shown.forEach((task, i) => {
-    const row = layout.rows[i];
-    boxes.push({rect: row.text, text: task.name, fontSize: 32, role: 'other'});
-    boxes.push({rect: row.meta, text: metaLabel(task), fontSize: 24, align: 2, role: 'other'});
+  const boxes: Box[] = await step('lay out boxes', () => {
+    const list: Box[] = [
+      {rect: layout.headerDate, text: dayLabel(new Date()), fontSize: 44, bold: true, role: 'other'},
+      {rect: layout.headerStatus, text: 'Spike · not synced', fontSize: 30, align: 2, role: 'status'},
+    ];
+    shown.forEach((task, i) => {
+      const row = layout.rows[i];
+      list.push({rect: row.text, text: task.name, fontSize: 32, role: 'other'});
+      list.push({rect: row.meta, text: metaLabel(task), fontSize: 24, align: 2, role: 'other'});
+    });
+    return list;
   });
 
   let statusUuid: string | null = null;
@@ -175,13 +177,15 @@ async function renderPage(
     const {value: elements, ms} = await timed(async () => {
       const made: Element[] = [];
       for (const box of boxes) {
-        const element = await textElement(page, box);
+        const element = await step(`create text element ${made.length + 1}`, () =>
+          textElement(page, box),
+        );
         if (box.role === 'status') {
           statusUuid = element.uuid;
         }
         made.push(element);
       }
-      await insertElements(SPIKE_NOTE, page, made);
+      await step('insert elements', () => insertElements(SPIKE_NOTE, page, made));
       return made;
     });
     record('q2-render', 'pass', `${elements.length} text boxes via insertElements before opening`, ms);

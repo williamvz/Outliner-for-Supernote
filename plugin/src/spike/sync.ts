@@ -22,7 +22,7 @@ import {
 } from '../sn';
 import {sendReport} from '../worker';
 import {PAGE_STATE_KEY, type SpikePage} from './today';
-import {allFindings, describeError, eventLog, logEvent, record, stackHint, timed} from './report';
+import {allFindings, describeError, eventLog, logEvent, record, stackHint, step, timed} from './report';
 
 /**
  * Toolbar "Sync": reads ticks and handwriting on the current page. The button
@@ -36,22 +36,24 @@ export async function runSync(): Promise<void> {
       record('permissions', 'fail', 'Sync: FILE:READ not granted');
       return;
     }
-    const path = await currentFilePath();
-    const page = await currentPage();
+    const path = await step('current file', currentFilePath);
+    const page = await step('current page', currentPage);
     // Strokes written since the last save live only in the note's memory cache.
-    await saveCurrentNote();
-    const size = await pageSizeOf(path, page);
+    await step('save note', saveCurrentNote);
+    const size = await step('page size', () => pageSizeOf(path, page));
     logEvent(`Sync: ${path} page ${page}, ${size.width}x${size.height}`);
-    const layout = computeLayout(size.width, size.height);
+    const layout = await step('compute layout', () => computeLayout(size.width, size.height));
 
-    const {value: elements, ms: readMs} = await timed(() => pageElements(path, page));
+    const {value: elements, ms: readMs} = await step('read elements', () =>
+      timed(() => pageElements(path, page)),
+    );
     const strokes = elements.filter(e => e.type === ELEMENT_STROKE);
-    const {value: shapes, ms: pointsMs} = await timed(() =>
-      Promise.all(strokes.map(e => strokeShape(e))),
+    const {value: shapes, ms: pointsMs} = await step(`read ${strokes.length} stroke shapes`, () =>
+      timed(() => Promise.all(strokes.map(e => strokeShape(e)))),
     );
 
-    const state = await getJSON<SpikePage | null>(PAGE_STATE_KEY, null);
-    const rows = readTaskZone(shapes, layout);
+    const state = await step('load page state', () => getJSON<SpikePage | null>(PAGE_STATE_KEY, null));
+    const rows = await step('read ticks', () => readTaskZone(shapes, layout));
     const done = rows.filter(r => r.done);
     record(
       'ticks',
@@ -63,7 +65,7 @@ export async function runSync(): Promise<void> {
         : 'no ticks found',
     );
 
-    const lines = readWritingZone(shapes, layout);
+    const lines = await step('group writing lines', () => readWritingZone(shapes, layout));
     const byId = new Map(strokes.map(e => [e.uuid, e]));
     const recognized: RecognizedLine[] = [];
     const {ms: recogMs} = await timed(async () => {
@@ -71,7 +73,9 @@ export async function runSync(): Promise<void> {
         const els = line.strokeIds
           .map(id => byId.get(id))
           .filter((e): e is Element => e !== undefined);
-        const text = els.length ? await recognize(els, size) : '';
+        const text = els.length
+          ? await step(`recognize line ${line.slot}`, () => recognize(els, size))
+          : '';
         recognized.push({slot: line.slot, level: line.level, marker: line.marker, text});
       }
     });
@@ -86,7 +90,7 @@ export async function runSync(): Promise<void> {
       readMs + pointsMs + recogMs,
     );
 
-    const nodes = buildOutline(recognized, `spike:${page}`);
+    const nodes = await step('build outline', () => buildOutline(recognized, `spike:${page}`));
     record(
       'outline',
       'info',

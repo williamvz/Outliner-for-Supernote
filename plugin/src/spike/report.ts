@@ -108,6 +108,22 @@ export function describeError(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
+/**
+ * Runs one named step and logs where it fails. Release bundles give stack
+ * frames with no names, so a plain "undefined is not a function" says nothing
+ * about which line threw; the step name does.
+ */
+export async function step<T>(name: string, fn: () => Promise<T> | T): Promise<T> {
+  try {
+    const value = await fn();
+    logEvent(`step ok: ${name}`);
+    return value;
+  } catch (e) {
+    logEvent(`step FAILED: ${name}: ${describeError(e)}`);
+    throw e;
+  }
+}
+
 /** The first frames of a stack trace, to find the failing call on the device. */
 export function stackHint(e: unknown): string {
   const frames = e instanceof Error && e.stack ? e.stack.split('\n').slice(1, 4) : [];
