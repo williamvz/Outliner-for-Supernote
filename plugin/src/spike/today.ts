@@ -15,14 +15,15 @@ import {
   insertText,
   jumpToPage,
   openFile,
-  pageSize,
+  pageSizeOf,
   PERMISSIONS,
   PluginManager,
   reloadFile,
+  saveCurrentNote,
   totalPages,
 } from '../sn';
 import {todayTasks, type TaskSummary} from '../worker';
-import {describeError, record, timed} from './report';
+import {describeError, logEvent, record, stackHint, timed} from './report';
 
 const ROOT = '/storage/emulated/0';
 export const NOTE_DIR = `${ROOT}/Note/Tana`;
@@ -53,27 +54,44 @@ const PLACEHOLDER_TASKS: TaskSummary[] = [
   recurring: i === 2,
 }));
 
-/** Toolbar "Today": adds a templated page to the spike notebook and writes tasks on it. */
-export async function runToday(): Promise<void> {
+/**
+ * Toolbar "Today": adds a templated page to the spike notebook, writes tasks
+ * on it, then closes the plugin view and opens the page. The button opens the
+ * plugin view (showType 1) so the user sees progress and errors.
+ */
+export async function runToday(): Promise<boolean> {
+  logEvent('Today: started');
   try {
     const granted =
       (await ensurePermission(PERMISSIONS.read, 'Read the Tana notebook')) &&
       (await ensurePermission(PERMISSIONS.write, 'Write tasks onto the Today page'));
-    record('permissions', granted ? 'pass' : 'fail', `file read+write granted: ${granted}`);
+    record('permissions', granted ? 'pass' : 'fail', `Today: file read+write granted: ${granted}`);
     if (!granted) {
-      return;
+      return false;
     }
 
+    const open = await currentFilePath().catch(() => '');
+    if (open === SPIKE_NOTE) {
+      // File-level edits of the open note need its in-memory changes saved first.
+      await saveCurrentNote();
+      logEvent('Today: saved the open spike note first');
+    }
     const template = await installTemplate();
     const {page, created} = await addTodayPage(template);
-    const size = await pageSize(SPIKE_NOTE, page);
+    const size = await pageSizeOf(SPIKE_NOTE, page);
     record('device', 'info', `page ${size.width}x${size.height}, notebook page ${page}, template ${template}`);
 
     const tasks = await loadTasks();
-    const state = await renderPage(page, size, tasks, created);
+    const state = await renderPage(page, size, tasks);
     await setJSON(PAGE_STATE_KEY, state);
+
+    await PluginManager.closePluginView();
+    await show(page, created, open);
+    logEvent(`Today: done, showing page ${page}`);
+    return true;
   } catch (e) {
-    record('q2-render', 'fail', describeError(e));
+    record('q2-render', 'fail', `Today: ${describeError(e)}${stackHint(e)}`);
+    return false;
   }
 }
 
@@ -139,7 +157,6 @@ async function renderPage(
   page: number,
   size: {width: number; height: number},
   tasks: TaskSummary[],
-  created: boolean,
 ): Promise<SpikePage> {
   const layout = computeLayout(size.width, size.height);
   const shown = tasks.slice(0, layout.rows.length);
@@ -168,12 +185,11 @@ async function renderPage(
       return made;
     });
     record('q2-render', 'pass', `${elements.length} text boxes via insertElements before opening`, ms);
-    await show(page, created);
   } catch (e) {
     // Fallback: open the page first and insert into the current page.
+    // insertText always targets the page on screen, so jump there first.
     record('q2-render', 'info', `insertElements failed (${describeError(e)}); trying insertText`);
-    await show(page, created);
-    await new Promise(r => setTimeout(r, 1200));
+    await openFile(SPIKE_NOTE, page);
     const {ms} = await timed(async () => {
       for (const box of boxes) {
         await insertText(textBoxFields(box));
@@ -190,8 +206,7 @@ async function renderPage(
   };
 }
 
-async function show(page: number, created: boolean): Promise<void> {
-  const open = await currentFilePath().catch(() => '');
+async function show(page: number, created: boolean, open: string): Promise<void> {
   if (open === SPIKE_NOTE && !created) {
     await reloadFile();
     await jumpToPage(page);

@@ -12,29 +12,36 @@ import {
   ensurePermission,
   modifyElements,
   pageElements,
-  pageSize,
+  pageSizeOf,
   PERMISSIONS,
   PluginCommAPI,
   recognize,
   reloadFile,
+  saveCurrentNote,
   strokeShape,
 } from '../sn';
 import {sendReport} from '../worker';
 import {PAGE_STATE_KEY, type SpikePage} from './today';
-import {allFindings, describeError, record, timed} from './report';
+import {allFindings, describeError, eventLog, logEvent, record, stackHint, timed} from './report';
 
-/** Toolbar "Sync" (no UI): reads ticks and handwriting on the current page. */
+/**
+ * Toolbar "Sync": reads ticks and handwriting on the current page. The button
+ * opens the plugin view, which shows the result in the report when done.
+ */
 export async function runSync(): Promise<void> {
   const started = Date.now();
-  record('q5-background', 'info', 'sync started from toolbar button');
+  logEvent('Sync: started');
   try {
     if (!(await ensurePermission(PERMISSIONS.read, 'Read your ticks and writing'))) {
-      record('permissions', 'fail', 'FILE:READ not granted');
+      record('permissions', 'fail', 'Sync: FILE:READ not granted');
       return;
     }
     const path = await currentFilePath();
     const page = await currentPage();
-    const size = await pageSize(path, page);
+    // Strokes written since the last save live only in the note's memory cache.
+    await saveCurrentNote();
+    const size = await pageSizeOf(path, page);
+    logEvent(`Sync: ${path} page ${page}, ${size.width}x${size.height}`);
     const layout = computeLayout(size.width, size.height);
 
     const {value: elements, ms: readMs} = await timed(() => pageElements(path, page));
@@ -91,15 +98,22 @@ export async function runSync(): Promise<void> {
     );
 
     await updateStatus(path, page, elements, state, done.length, nodes.length);
-
-    record('q5-background', 'pass', 'sync finished without UI', Date.now() - started);
+    logEvent(`Sync: done in ${Date.now() - started} ms`);
   } catch (e) {
-    record('q5-background', 'fail', describeError(e), Date.now() - started);
+    record(
+      'q3-recognize',
+      'fail',
+      `Sync failed after ${Date.now() - started} ms: ${describeError(e)}${stackHint(e)}`,
+    );
   } finally {
-    PluginCommAPI.clearElementCache();
+    try {
+      PluginCommAPI.clearElementCache();
+    } catch (e) {
+      logEvent(`clearElementCache: ${describeError(e)}`);
+    }
   }
   try {
-    await sendReport({findings: allFindings(), sentAt: new Date().toISOString()});
+    await sendReport({findings: allFindings(), log: eventLog(), sentAt: new Date().toISOString()});
   } catch {
     // Report upload is best effort; the screen still shows everything.
   }
@@ -132,6 +146,7 @@ async function updateStatus(
     const hhmm = `${now.getHours()}:${String(now.getMinutes()).padStart(2, '0')}`;
     status.textBox.textContentFull = `Spike · synced ${hhmm} · ${ticks} ticks · ${nodes} nodes`;
     const {ms} = await timed(async () => {
+      await saveCurrentNote();
       await modifyElements(path, page, [status]);
       await reloadFile();
     });

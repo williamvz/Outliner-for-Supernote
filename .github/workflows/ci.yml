@@ -19,12 +19,24 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: plugin/package-lock.json
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: gradle
       - run: npm ci
       - run: npm run typecheck
       - run: npm run lint
       - run: npm test -- --ci
       - name: Build plugin package
         run: bash buildPlugin.sh
+      # buildPlugin.sh still packages when the native build fails, just without
+      # app.npk; without it the plugin's file store (TanaNative) is missing.
+      - name: Check the package contains the native code
+        run: |
+          unzip -l build/outputs/TanaSync.snplg
+          unzip -l build/outputs/TanaSync.snplg | grep -q ' app.npk$'
+          unzip -p build/outputs/TanaSync.snplg PluginConfig.json | grep -q 'com.tanasync.TanaPackage'
       - uses: actions/upload-artifact@v4
         with:
           name: TanaSync-snplg

@@ -1,74 +1,59 @@
-import {TurboModuleRegistry} from 'react-native';
+import {NativeModules, TurboModuleRegistry} from 'react-native';
+import {PluginManager} from 'sn-plugin-lib';
 
 /**
- * Key-value storage. AsyncStorage is a native module; PluginHost may or may not
- * ship it (spike Q6). Until we know, fall back to memory so nothing crashes.
+ * JSON files in the plugin's private directory, written by our own native
+ * module (android/.../TanaNativeModule.java). PluginHost ships no
+ * AsyncStorage (spike Q6), and its own file utils cannot write content.
+ * Without the native module (e.g. in Jest) values live in memory only.
  */
 
-interface KV {
-  getItem(key: string): Promise<string | null>;
-  setItem(key: string, value: string): Promise<void>;
+interface TanaNative {
+  readFile(path: string): Promise<string | null>;
+  writeFile(path: string, content: string): Promise<boolean>;
+  appendFile(path: string, content: string): Promise<boolean>;
 }
 
+const native: TanaNative | undefined = NativeModules.TanaNative;
 const memory = new Map<string, string>();
-const memoryKV: KV = {
-  getItem: async key => memory.get(key) ?? null,
-  setItem: async (key, value) => {
-    memory.set(key, value);
-  },
-};
+let dataDir: Promise<string> | null = null;
 
-let backend: KV | null = null;
-let backendName = 'memory';
+export const storageName = () => (native ? 'TanaNative files' : 'memory');
 
-function resolve(): KV {
-  if (backend) {
-    return backend;
-  }
-  try {
-    if (TurboModuleRegistry.get('RNCAsyncStorage') || TurboModuleRegistry.get('PlatformLocalStorage')) {
-      backend = require('@react-native-async-storage/async-storage').default as KV;
-      backendName = 'AsyncStorage';
-      return backend;
-    }
-  } catch {
-    // fall through to memory
-  }
-  backend = memoryKV;
-  return backend;
+function dir(): Promise<string> {
+  dataDir ??= PluginManager.getPluginDirPath().then(d => `${d ?? ''}/data`);
+  return dataDir;
 }
-
-export const storageName = () => {
-  resolve();
-  return backendName;
-};
 
 export async function getJSON<T>(key: string, fallback: T): Promise<T> {
-  const raw = await resolve().getItem(key);
+  const raw = native ? await native.readFile(`${await dir()}/${key}.json`) : memory.get(key) ?? null;
   return raw ? (JSON.parse(raw) as T) : fallback;
 }
 
 export async function setJSON(key: string, value: unknown): Promise<void> {
-  await resolve().setItem(key, JSON.stringify(value));
+  const raw = JSON.stringify(value);
+  if (native) {
+    await native.writeFile(`${await dir()}/${key}.json`, raw);
+  } else {
+    memory.set(key, raw);
+  }
 }
 
 /** Native modules worth knowing about, for the spike report. */
 export function nativeModuleInventory(): string[] {
   const names = [
+    'TanaNative',
     'RNCAsyncStorage',
     'PlatformLocalStorage',
     'RNFSManager',
     'ReactNativeBlobUtil',
-    'RNMMKV',
-    'MMKVNative',
-    'RNCNetInfo',
     'BlobModule',
     'FileReaderModule',
     'RTNFileUtils',
   ];
   return names.filter(n => {
     try {
-      return TurboModuleRegistry.get(n) != null;
+      return NativeModules[n] != null || TurboModuleRegistry.get(n) != null;
     } catch {
       return false;
     }

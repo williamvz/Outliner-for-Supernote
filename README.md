@@ -27,29 +27,40 @@ except one clearly marked test node, and only when you ask for it.
 
 ## Try the spike on the Nomad
 
-1. **Download the plugin.** Open the latest **CI** run for this branch on
-   GitHub and download the **TanaSync-snplg** artifact. Unzip it to get
-   `TanaSync.snplg`.
-2. **Copy it to the Nomad.** Put it in the `MyStyle` folder, over USB or via
-   *Browse & Access*.
-3. **Install it.** On the Nomad, go to *Settings → Apps → Plugins → Add
-   Plugin* and pick `TanaSync.snplg`.
-4. **Find the buttons.** Open any notebook. The toolbar now has **Today**,
-   **Sync** and **Tana**.
-5. **Grant permissions.** Tap **Tana**, then **Run checks**. Allow all three
-   permissions with **Always allow**.
-6. **Configure the Worker.** In **Config**, enter the Worker URL and the device
-   passphrase, then tap **Save**. Run checks again: the network line should
+1. **Download the plugin.** Open the latest **CI** run on `main` on GitHub and
+   download the **TanaSync-snplg** artifact. Unzip it to get
+   `TanaSync.snplg` (upload that file, not the zip).
+2. **Copy it to the Nomad.** Put it directly in the `MyStyle` folder. On a
+   Mac, *Browse & Access* over Wi-Fi is easiest; USB needs an app such as
+   OpenMTP.
+3. **Install it.** On the Nomad, go to *Settings → Apps → Plugins → Choose
+   Installation Package* and pick `TanaSync.snplg`. Copying the file alone
+   does not install it. To update, install the new file the same way.
+4. **Allow file access.** In *Settings → Apps → Plugins → Tana Sync*, allow
+   file read and write (**Always allow**). Internet access is asked on first
+   use.
+5. **Find the buttons.** Open any notebook. The toolbar has **Today**,
+   **Sync**, **Tana** and **Ping**. The Tana panel also has **Today page** and
+   **Sync page** buttons that do the same as the toolbar ones.
+6. **Configure the Worker.** Tap **Tana**, then **Config**. Enter the Worker
+   URL and the device passphrase and tap **Save**. They are kept across
+   restarts. Then tap **Run checks**: the network and device API lines should
    pass.
-7. **Create a page.** Tap **Today**. The plugin creates `Note/Tana/Spike.note`
-   with a templated page and writes up to six tasks on it.
+7. **Create a page.** Tap **Today**. A status screen opens. The plugin
+   creates `Note/Tana/Spike.note` with a templated page and up to six tasks,
+   then closes the screen and shows the page. If the screen opens but nothing
+   happens, tap **Today page** on it.
 8. **Write on the page.**
    - Tick two tasks: one in the box, one by striking it through.
    - Below the line, write a few lines with dashes and indentation.
    - Write one line starting with a small box ☐.
-9. **Sync.** Tap **Sync** and wait a few seconds. The status line at the top
-   right should update.
-10. **Report.** Tap **Tana** to read the report, then **Send report**.
+9. **Sync.** On that page, tap **Sync**. The status screen shows what was
+   read, and the status line on the page updates. If nothing happens, tap
+   **Sync page** on the screen.
+10. **Ping.** Tap **Ping** once. It opens nothing; it tests whether a button
+    without a screen reaches the plugin.
+11. **Report.** Tap **Tana**, then **Send report**. The activity box at the
+    top shows the latest steps and errors.
 
 ## Worker
 
