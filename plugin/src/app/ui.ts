@@ -11,11 +11,13 @@ export interface UiState {
   lines: string[];
   busy: boolean;
   plan: SyncPlan | null;
+  /** True when the SYNC box on the page started the sync: close the panel after a clean send. */
+  closeAfterSend: boolean;
 }
 
 type Listener = (state: UiState) => void;
 
-let state: UiState = {title: 'Tana Sync', lines: [], busy: false, plan: null};
+let state: UiState = {title: 'Tana Sync', lines: [], busy: false, plan: null, closeAfterSend: false};
 const listeners = new Set<Listener>();
 
 export const getUi = () => state;

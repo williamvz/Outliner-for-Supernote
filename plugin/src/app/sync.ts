@@ -1,27 +1,29 @@
 import type {Element} from 'sn-plugin-lib';
-import {computeLayout} from '../core/layout';
+import {computeLayout, type PageLayout} from '../core/layout';
 import {readWritingZone} from '../core/lines';
 import {buildOutline, type RecognizedLine} from '../core/outline';
 import {readTaskZone} from '../core/ticks';
+import type {StrokeShape} from '../core/geometry';
 import {
   currentFilePath,
-  currentPage,
   ELEMENT_STROKE,
   ensurePermission,
   pageElements,
   pageSizeOf,
   PERMISSIONS,
   PluginCommAPI,
+  PluginManager,
   recognize,
   saveCurrentNote,
   strokeShape,
+  totalPages,
 } from '../sn';
 import {describeError, record, stackHint, step} from '../spike/report';
 import {NetworkError, postNotes, postSync, type SyncAction} from '../worker';
 import {flushOutbox, queue} from './outbox';
-import {loadPage, savePage, type PageRow, type PageState} from './store';
-import {NOTE_DIR} from './today';
-import {begin, end, say, setUi} from './ui';
+import {loadNotebook, saveNotebook, type NotebookState, type PageRow} from './store';
+import {NOTE_DIR} from './paths';
+import {begin, end, getUi, say, setUi} from './ui';
 import {hash} from './util';
 
 export interface PlanNote {
@@ -41,12 +43,15 @@ export interface SyncPlan {
 }
 
 /**
- * Sync: read the ticks, "Not today" marks and handwriting on the open Today
- * page and show what would be sent. Nothing reaches Tana until the user
- * taps Send, because handwriting recognition can misread.
+ * Sync: read the ticks, "Not today" marks and handwriting in the open notebook
+ * (every page of it) and show what would be sent. Nothing reaches Tana until
+ * the user taps Send, because handwriting recognition can misread.
+ * `fromTap` is true when the SYNC box on the page started it: after a
+ * successful send the panel then closes by itself.
  */
-export async function runSync(): Promise<void> {
+export async function runSync(fromTap = false): Promise<void> {
   begin('Sync');
+  setUi({closeAfterSend: fromTap});
   try {
     if (!(await ensurePermission(PERMISSIONS.read, 'Read your ticks and handwriting'))) {
       say('File access is not allowed. Allow it in Settings → Apps → Plugins → Tana Sync.');
@@ -61,57 +66,47 @@ export async function runSync(): Promise<void> {
 
     const file = await step('current notebook', currentFilePath);
     if (!file.startsWith(`${NOTE_DIR}/`)) {
-      say('Open a Today notebook first (Note → Tana), then tap Sync.');
+      say('Open a Tasks or Notes notebook first (Note → Tana), then Sync.');
       return;
     }
-    const state = await loadPage(file);
+    const state = await loadNotebook(file);
     if (!state) {
-      say('This notebook was not made by Today, so I do not know its tasks.');
-      return;
-    }
-    const page = await step('current page', currentPage);
-    if (page !== 0) {
-      say('Sync reads page 1 of a Today notebook. Go to page 1 and tap Sync again.');
+      say('This notebook was not made by the plugin, so I do not know what is in it.');
       return;
     }
 
     await step('save notebook', saveCurrentNote);
-    const size = await step('page size', () => pageSizeOf(file, page));
-    const layout = computeLayout(size.width, size.height);
-    const elements = await step('read page', () => pageElements(file, page));
-    const strokes = elements.filter(e => e.type === ELEMENT_STROKE);
-    say(`${strokes.length} pen strokes on the page`);
-
-    const shapes = await step(`read ${strokes.length} strokes`, async () => {
-      const read = await Promise.all(strokes.map(e => strokeShape(e).catch(err => err as Error)));
-      const failed = read.filter((r): r is Error => r instanceof Error);
-      if (failed.length) {
-        say(`${failed.length} strokes could not be read (${describeError(failed[0])})`);
-      }
-      return read.filter(r => !(r instanceof Error)) as Awaited<ReturnType<typeof strokeShape>>[];
-    });
-
-    const marks = await step('read ticks', () => readTaskZone(shapes, layout));
+    const count = state.kind === 'tasks' ? state.pages.length : await step('count pages', () => totalPages(file));
     const done: PageRow[] = [];
     const skip: PageRow[] = [];
-    marks.forEach((m, i) => {
-      const row = state.rows[i];
-      if (!row) {
-        return;
-      }
-      if (m.done && !state.sentDone.includes(row.id)) {
-        done.push(row);
-      } else if (m.skip && !m.done && !state.sentSkip.includes(row.id) && !state.sentDone.includes(row.id)) {
-        skip.push(row);
-      }
-    });
+    const lines: RecognizedLine[][] = [];
 
-    const notes = await step('read handwriting', () => readNotes(shapes, strokes, layout, size, file, state));
-    const plan: SyncPlan = {file, date: state.date, done, skip, notes};
-    setUi({plan});
+    for (let page = 0; page < count; page++) {
+      const size = await step(`page ${page + 1} size`, () => pageSizeOf(file, page));
+      const layout = computeLayout(size.width, size.height, state.kind);
+      const elements = await step(`read page ${page + 1}`, () => pageElements(file, page));
+      const strokes = elements.filter(e => e.type === ELEMENT_STROKE);
+      if (!strokes.length) {
+        continue;
+      }
+      const shapes = await readShapes(strokes, page);
+      if (state.kind === 'tasks') {
+        collectTicks(shapes, layout, state, page, done, skip);
+      } else {
+        lines[page] = await readLines(shapes, strokes, layout, size, page);
+      }
+    }
+
+    const notes = state.kind === 'notes' ? outline(lines, file, state) : [];
+    setUi({plan: {file, date: state.date, done, skip, notes}});
+    say(`${count} page${count === 1 ? '' : 's'} read`);
     record('sync', 'pass', `${done.length} done, ${skip.length} not today, ${notes.length} notes`);
     if (!done.length && !skip.length && !notes.length) {
-      say('Nothing new to send. Tick a box, mark NOT TODAY, or write below the line.');
+      say(
+        state.kind === 'tasks'
+          ? 'Nothing new to send. Tick a box, or mark NOT TODAY, then Sync again.'
+          : 'Nothing new to send. Write on the page, then Sync again.',
+      );
     }
   } catch (e) {
     say(`Sync failed: ${describeError(e)}`);
@@ -126,62 +121,106 @@ export async function runSync(): Promise<void> {
   }
 }
 
-async function readNotes(
-  shapes: Awaited<ReturnType<typeof strokeShape>>[],
+async function readShapes(strokes: Element[], page: number): Promise<StrokeShape[]> {
+  return step(`read ${strokes.length} strokes on page ${page + 1}`, async () => {
+    const read = await Promise.all(strokes.map(e => strokeShape(e).catch(err => err as Error)));
+    const failed = read.filter((r): r is Error => r instanceof Error);
+    if (failed.length) {
+      say(`${failed.length} strokes could not be read (${describeError(failed[0])})`);
+    }
+    return read.filter((r): r is StrokeShape => !(r instanceof Error));
+  });
+}
+
+function collectTicks(
+  shapes: StrokeShape[],
+  layout: PageLayout,
+  state: NotebookState,
+  page: number,
+  done: PageRow[],
+  skip: PageRow[],
+): void {
+  readTaskZone(shapes, layout).forEach((m, i) => {
+    const row = state.pages[page]?.[i];
+    if (!row) {
+      return;
+    }
+    const sent = state.sentDone.includes(row.id) || state.sentSkip.includes(row.id);
+    if (sent || done.some(r => r.id === row.id) || skip.some(r => r.id === row.id)) {
+      return;
+    }
+    if (m.done) {
+      done.push(row);
+    } else if (m.skip) {
+      skip.push(row);
+    }
+  });
+}
+
+async function readLines(
+  shapes: StrokeShape[],
   strokes: Element[],
-  layout: ReturnType<typeof computeLayout>,
+  layout: PageLayout,
   size: {width: number; height: number},
-  file: string,
-  state: PageState,
-): Promise<PlanNote[]> {
-  const lines = readWritingZone(shapes, layout);
-  if (!lines.length) {
-    return [];
-  }
+  page: number,
+): Promise<RecognizedLine[]> {
+  const writing = readWritingZone(shapes, layout);
   const byId = new Map(strokes.map(e => [e.uuid, e]));
   const recognized: RecognizedLine[] = [];
-  for (const line of lines) {
+  for (const line of writing) {
     const els = line.strokeIds.map(id => byId.get(id)).filter((e): e is Element => e !== undefined);
     let text = '';
     if (els.length) {
       try {
         text = (await recognize(els, size)).trim();
       } catch (e) {
-        say(`Could not read line ${line.slot + 1}: ${describeError(e)}`);
+        say(`Could not read line ${line.slot + 1} on page ${page + 1}: ${describeError(e)}`);
       }
     }
     recognized.push({slot: line.slot, level: line.level, marker: line.marker, text});
   }
-  const nodes = buildOutline(recognized, file);
-  return nodes
-    .map(n => ({
-      level: n.level,
-      text: n.text,
-      isTask: n.isTask,
-      key: `${n.slots[0]}:${hash(n.text)}`,
-    }))
-    .filter(n => n.text && !state.sentLines.includes(n.key));
+  return recognized;
+}
+
+function outline(pages: RecognizedLine[][], file: string, state: NotebookState): PlanNote[] {
+  const out: PlanNote[] = [];
+  pages.forEach((lines, page) => {
+    if (!lines?.length) {
+      return;
+    }
+    for (const n of buildOutline(lines, `${file}:${page}`)) {
+      const key = `${page}:${n.slots[0]}:${hash(n.text)}`;
+      if (n.text && !state.sentLines.includes(key)) {
+        out.push({level: n.level, text: n.text, isTask: n.isTask, key});
+      }
+    }
+  });
+  return out;
 }
 
 /** The user's OK: send the plan, or queue it when offline. */
 export async function applyPlan(plan: SyncPlan): Promise<void> {
+  const closeAfter = getUi().closeAfterSend;
   begin('Sending to Tana');
+  let clean = false;
   try {
-    const state = await loadPage(plan.file);
+    const state = await loadNotebook(plan.file);
     if (!state) {
-      throw new Error('page memory is gone; run Sync again');
+      throw new Error('notebook memory is gone; run Sync again');
     }
     const actions: SyncAction[] = [
       ...plan.done.map((r): SyncAction => ({type: 'done', id: r.id})),
       ...plan.skip.map((r): SyncAction => ({type: 'postpone', id: r.id})),
     ];
     const names = new Map([...plan.done, ...plan.skip].map(r => [r.id, r.name]));
+    let failures = 0;
 
     if (actions.length) {
       try {
         const res = await postSync(actions);
         for (const r of res.results) {
           const mark = r.status === 'ok' ? '✓' : r.status === 'skipped' ? '–' : '✗';
+          failures += r.status === 'failed' ? 1 : 0;
           const verb = r.type === 'done' ? 'done' : 'tomorrow';
           say(`${mark} ${verb}: ${names.get(r.id) ?? r.id} (${r.detail})`);
         }
@@ -212,14 +251,21 @@ export async function applyPlan(plan: SyncPlan): Promise<void> {
       state.sentLines.push(...plan.notes.map(n => n.key));
     }
 
-    await savePage(state);
+    await saveNotebook(state);
     setUi({plan: null});
-    say('Done. Tap Today for a fresh page when you want the next tasks.');
     record('send', 'pass', `${actions.length} actions, ${plan.notes.length} notes`);
+    clean = failures === 0;
+    say(clean ? 'Done.' : 'Done, with problems (see above).');
   } catch (e) {
     say(`Sending failed: ${describeError(e)}`);
     record('send', 'fail', describeError(e));
   } finally {
     end();
+  }
+  if (clean && closeAfter) {
+    // started from the SYNC box on the page: give the result a moment, then back to the page
+    setTimeout(() => {
+      PluginManager.closePluginView().catch(() => undefined);
+    }, 1500);
   }
 }

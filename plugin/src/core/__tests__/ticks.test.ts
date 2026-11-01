@@ -27,10 +27,7 @@ describe('readTaskZone', () => {
     expect(marks.map(m => [m.done, m.skip])).toEqual([
       [true, false],
       [false, true],
-      [false, false],
-      [false, false],
-      [false, false],
-      [false, false],
+      ...Array.from({length: layout.rows.length - 2}, () => [false, false]),
     ]);
   });
 

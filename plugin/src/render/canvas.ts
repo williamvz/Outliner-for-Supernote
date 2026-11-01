@@ -39,10 +39,19 @@ export class Canvas {
     }
   }
 
+  /** Darkest value wins, so a light rule never washes out text. */
   fillRect(left: number, top: number, right: number, bottom: number, value: number): void {
-    for (let y = Math.max(0, Math.round(top)); y < Math.min(this.height, Math.round(bottom)); y++) {
-      for (let x = Math.max(0, Math.round(left)); x < Math.min(this.width, Math.round(right)); x++) {
-        this.setPixel(x, y, value);
+    const x0 = Math.max(0, Math.round(left));
+    const x1 = Math.min(this.width, Math.round(right));
+    const y1 = Math.min(this.height, Math.round(bottom));
+    const p = this.pixels;
+    for (let y = Math.max(0, Math.round(top)); y < y1; y++) {
+      let i = y * this.width + x0;
+      for (let x = x0; x < x1; x++) {
+        if (value < p[i]) {
+          p[i] = value;
+        }
+        i++;
       }
     }
   }
@@ -100,14 +109,26 @@ export class Canvas {
     for (const ch of text) {
       const g = f.glyphs[ch.codePointAt(0)!] ?? f.glyphs[63];
       const [w, h, left, top, advance, offset] = g;
+      const gx = Math.round(pen) + left;
+      const gy = baseline - top;
+      const span = 255 - ink;
+      const p = this.pixels;
       for (let row = 0; row < h; row++) {
+        const y = gy + row;
+        if (y < 0 || y >= this.height) {
+          continue;
+        }
         for (let col = 0; col < w; col++) {
           const index = row * w + col;
           const byte = data[offset + (index >> 1)];
           const alpha = index & 1 ? byte & 15 : byte >> 4;
-          if (alpha) {
-            const value = 255 - Math.round(((255 - ink) * alpha) / 15);
-            this.setPixel(Math.round(pen) + left + col, baseline - top + row, value);
+          const x = gx + col;
+          if (alpha && x >= 0 && x < this.width) {
+            const value = 255 - Math.round((span * alpha) / 15);
+            const at = y * this.width + x;
+            if (value < p[at]) {
+              p[at] = value;
+            }
           }
         }
       }

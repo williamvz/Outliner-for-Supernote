@@ -1,21 +1,12 @@
 {
-  "base": {
-    "width": 1404,
-    "height": 1872
-  },
-  "margin": {
-    "left": 96,
-    "right": 96
-  },
-  "header": {
-    "top": 36,
-    "bottom": 150,
-    "split": 704
-  },
+  "base": { "width": 1404, "height": 1872 },
+  "margin": { "left": 96, "right": 96 },
+  "header": { "top": 36, "bottom": 150 },
+  "sync": { "left": 1096, "top": 48, "right": 1308, "bottom": 128 },
   "tasks": {
     "top": 196,
-    "rowHeight": 108,
-    "rows": 6,
+    "rowHeight": 112,
+    "rows": 14,
     "checkboxLeft": 108,
     "checkboxSize": 60,
     "textLeft": 196,
@@ -24,15 +15,12 @@
     "metaRight": 1226,
     "skipLeft": 1244,
     "skipSize": 60,
-    "captionTop": 156
+    "footerBaseline": 1818
   },
-  "divider": {
-    "y": 874
-  },
-  "writing": {
-    "top": 892,
+  "notes": {
+    "top": 176,
     "lineSpacing": 93,
-    "lines": 10,
+    "lines": 17,
     "indentStep": 80,
     "indentGuides": 6,
     "markLeft": 1316,

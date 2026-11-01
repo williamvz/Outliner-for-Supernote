@@ -60,6 +60,7 @@ const api: Record<string, (...a: any[]) => any> = {
   getDeviceType: () => Promise.resolve(4),
 };
 const manager: Record<string, (...a: any[]) => any> = {
+  showPluginView: () => Promise.resolve(true),
   hasPermission: () => Promise.resolve(1),
   requestPermission: () => Promise.resolve(1),
   getPluginDirPath: () => Promise.resolve('/data/plugin'),
@@ -135,14 +136,16 @@ import {NativeModules} from 'react-native';
   },
 };
 
-const {runToday} = require('../today');
-const {runSelfTest} = require('../selftest');
+const {runTasks} = require('../tasks');
+const {runNotes} = require('../notes');
 const {runSync, applyPlan} = require('../sync');
+const {runSelfTest} = require('../selftest');
+const {handleTap} = require('../syncTap');
 const {getUi} = require('../ui');
-const {loadPage} = require('../store');
+const {loadNotebook} = require('../store');
 
-const tasks = Array.from({length: 9}, (_, i) => ({
-  id: `task${i}x`,
+const tasks = Array.from({length: 31}, (_, i) => ({
+  id: `task${i}xx`,
   name: `Task number ${i}`,
   priority: 'P2',
   deadline: '2026-10-29',
@@ -158,100 +161,184 @@ beforeEach(() => {
   fake.calls = [];
   fake.open = '';
   fake.strokes = [];
-  mockWorker.getTasks.mockResolvedValue({generatedAt: 'x', today: '2026-10-31', count: 9, refreshing: null, tasks});
+  mockWorker.getTasks.mockResolvedValue({generatedAt: 'x', today: '2026-10-31', count: 31, refreshing: null, tasks});
 });
 
-describe('Today', () => {
-  it('draws the page, writes it as a template, creates the notebook and opens it', async () => {
-    await runToday();
-    const lines = getUi().lines.join('\n');
-    expect(lines).not.toMatch(/failed/i);
-    expect(mockWorker.getTasks).toHaveBeenCalled();
-    expect([...fake.written.keys()]).toEqual(['/storage/emulated/0/MyStyle/tana_today.png']);
+describe('Tasks', () => {
+  it('makes a notebook with a page for every 14 tasks and opens it', async () => {
+    await runTasks();
+    expect(getUi().lines.join('\n')).not.toMatch(/failed/i);
     const [path, note] = [...fake.notes.entries()][0];
-    expect(path).toMatch(/\/Note\/Tana\/\d{4}-\d{2}-\d{2}\.note$/);
-    expect(note.template).toBe('/storage/emulated/0/MyStyle/tana_today.png');
+    expect(path).toMatch(/\/Note\/Tana\/Tasks \d{4}-\d{2}-\d{2}\.note$/);
+    expect(note.template).toBe('/storage/emulated/0/MyStyle/tana_page.png');
+    expect(note.pages).toBe(3); // 31 tasks = 14 + 14 + 3
     expect(fake.open).toBe(path);
-    const state = await loadPage(path);
-    expect(state.rows).toHaveLength(6);
-    expect(state.rows[0]).toMatchObject({id: 'task0x', name: 'Task number 0'});
+    const state = await loadNotebook(path);
+    expect(state.kind).toBe('tasks');
+    expect(state.pages.map((p: unknown[]) => p.length)).toEqual([14, 14, 3]);
+    expect(state.pages[1][0]).toMatchObject({id: 'task14xx'});
+  });
+
+  it('asks the Worker for the saved filters', async () => {
+    const {saveFilters} = require('../store');
+    await saveFilters({priorities: ['P1', 'P2'], domains: ['Work']});
+    await runTasks();
+    expect(mockWorker.getTasks).toHaveBeenCalledWith({priorities: ['P1', 'P2'], domains: ['Work']});
+    await saveFilters({priorities: [], domains: []});
+  });
+
+  it('says so when no task matches', async () => {
+    mockWorker.getTasks.mockResolvedValue({generatedAt: 'x', today: '2026-10-31', count: 0, refreshing: null, tasks: []});
+    await runTasks();
+    expect(getUi().lines.join('\n')).toMatch(/No open tasks match/);
+    expect(fake.notes.size).toBe(0);
   });
 
   it('names a second notebook of the same day differently', async () => {
-    await runToday();
-    await runToday();
-    const names = [...fake.notes.keys()];
-    expect(new Set(names).size).toBe(2);
+    await runTasks();
+    await runTasks();
+    expect(new Set(fake.notes.keys()).size).toBe(2);
   });
 
   it('says what failed, with the step name, when the device refuses', async () => {
+    const real = api.createNote;
     api.createNote = () => Promise.resolve({success: false, result: null, error: {code: 9, message: 'no space'}});
-    await runToday();
-    expect(getUi().lines.join('\n')).toMatch(/create notebook.*no space|Today failed: createNote failed \(9\): no space/);
-    api.createNote = ({notePath, template}: any) => {
-      fake.notes.set(notePath, {template, pages: 1});
-      return ok(true);
-    };
+    await runTasks();
+    expect(getUi().lines.join('\n')).toMatch(/Tasks failed: createNote failed \(9\): no space/);
+    api.createNote = real;
+  });
+});
+
+describe('Notes', () => {
+  it('creates today\'s notebook once, then opens it, then adds a page when it is open', async () => {
+    await runNotes();
+    const [path, note] = [...fake.notes.entries()][0];
+    expect(path).toMatch(/\/Note\/Tana\/Notes \d{4}-\d{2}-\d{2}\.note$/);
+    expect(note.pages).toBe(1);
+    expect((await loadNotebook(path)).kind).toBe('notes');
+
+    fake.open = '';
+    await runNotes();
+    expect(fake.notes.size).toBe(1);
+    expect(fake.open).toBe(path);
+    expect(fake.notes.get(path)!.pages).toBe(1);
+
+    await runNotes(); // now it is open: add a page
+    expect(fake.notes.get(path)!.pages).toBe(2);
   });
 });
 
 describe('Sync', () => {
-  it('reads ticks, not-today marks and handwriting, then sends them after the OK', async () => {
-    await runToday();
-    const path = fake.open;
+  it('reads ticks and not-today marks on every page of a Tasks notebook, then sends after the OK', async () => {
+    await runTasks();
     const layout = computeLayout();
     const mid = (i: number) => (layout.rows[i].band.top + layout.rows[i].band.bottom) / 2;
+    // page 1: tick row 0; page 2: not-today on row 1
+    const perPage: Record<number, StrokeShape[]> = {
+      0: [tick(layout.rows[0].checkbox.left + 8, mid(0))],
+      1: [tick(layout.rows[1].skip.left + 8, mid(1))],
+      2: [],
+    };
+    api.getElements = (page: number) => {
+      const list = perPage[page] ?? [];
+      return ok(
+        list.map(s => {
+          byUuid.set(s.id, s);
+          return {uuid: s.id, type: 0, pageNum: page, layerNum: 0, numInPage: 1, stroke: {}};
+        }),
+      );
+    };
+    mockWorker.postSync.mockResolvedValue({
+      today: '2026-10-31',
+      results: [
+        {id: 'task0xx', type: 'done', status: 'ok', detail: 'checked'},
+        {id: 'task15xx', type: 'postpone', status: 'ok', detail: 'deadline → 2026-11-01'},
+      ],
+    });
+
+    await runSync();
+    const plan = getUi().plan;
+    expect(plan.done.map((r: any) => r.id)).toEqual(['task0xx']);
+    expect(plan.skip.map((r: any) => r.id)).toEqual(['task15xx']);
+    expect(mockWorker.postSync).not.toHaveBeenCalled(); // nothing goes out before the OK
+
+    await applyPlan(plan);
+    expect(mockWorker.postSync).toHaveBeenCalledWith([
+      {type: 'done', id: 'task0xx'},
+      {type: 'postpone', id: 'task15xx'},
+    ]);
+
+    await runSync(); // nothing new the second time
+    expect(getUi().plan.done).toHaveLength(0);
+    expect(getUi().plan.skip).toHaveLength(0);
+  });
+
+  it('reads handwriting on the Notes page and sends the outline', async () => {
+    await runNotes();
+    const layout = computeLayout(undefined, undefined, 'notes');
     const slotY = (k: number) => layout.writingZone.top + k * layout.lineSpacing + 60;
     const dash = segment(layout.marginLeft + 6, slotY(0) - 15, layout.marginLeft + 40, slotY(0) - 15, 4);
-    fake.strokes = [
-      tick(layout.rows[0].checkbox.left + 8, mid(0)),
-      tick(layout.rows[2].skip.left + 8, mid(2)),
+    const strokes = [
       dash,
       word(layout.marginLeft + 70, slotY(0), 90),
       word(layout.marginLeft + 180, slotY(0), 90),
       word(layout.marginLeft + 290, slotY(0), 90),
       word(layout.marginLeft + 400, slotY(0), 90),
     ];
-    mockWorker.postSync.mockResolvedValue({
-      today: '2026-10-31',
-      results: [
-        {id: 'task0x', type: 'done', status: 'ok', detail: 'checked'},
-        {id: 'task2x', type: 'postpone', status: 'ok', detail: 'deadline → 2026-11-01'},
-      ],
-    });
+    api.getElements = () =>
+      ok(
+        strokes.map(s => {
+          byUuid.set(s.id, s);
+          return {uuid: s.id, type: 0, pageNum: 0, layerNum: 0, numInPage: 1, stroke: {}};
+        }),
+      );
     mockWorker.postNotes.mockResolvedValue({day: '2026-10-31', imported: 1});
 
     await runSync();
     const plan = getUi().plan;
-    expect(plan).not.toBeNull();
-    expect(plan.done.map((r: any) => r.id)).toEqual(['task0x']);
-    expect(plan.skip.map((r: any) => r.id)).toEqual(['task2x']);
     expect(plan.notes).toHaveLength(1);
     expect(plan.notes[0].text).toMatch(/budget/);
-    expect(mockWorker.postSync).not.toHaveBeenCalled(); // nothing is sent before the OK
-
     await applyPlan(plan);
-    expect(mockWorker.postSync).toHaveBeenCalledWith([
-      {type: 'done', id: 'task0x'},
-      {type: 'postpone', id: 'task2x'},
+    expect(mockWorker.postNotes.mock.calls[0][2]).toEqual([
+      {level: 0, text: expect.stringMatching(/budget/), isTask: false},
     ]);
-    expect(mockWorker.postNotes).toHaveBeenCalledTimes(1);
-    expect(mockWorker.postNotes.mock.calls[0][2]).toEqual([{level: 0, text: expect.stringMatching(/budget/), isTask: false}]);
-
-    // a second Sync finds nothing new: the same ticks are not sent twice
     await runSync();
-    const again = getUi().plan;
-    expect(again.done).toHaveLength(0);
-    expect(again.skip).toHaveLength(0);
-    expect(again.notes).toHaveLength(0);
-    expect(path).toBe(fake.open);
+    expect(getUi().plan.notes).toHaveLength(0);
   });
 
-  it('asks for a Today notebook when another notebook is open', async () => {
+  it('asks for a Tasks or Notes notebook when another notebook is open', async () => {
     fake.open = '/storage/emulated/0/Note/Other.note';
     await runSync();
-    expect(getUi().lines.join('\n')).toMatch(/Open a Today notebook/);
+    expect(getUi().lines.join('\n')).toMatch(/Open a Tasks or Notes notebook/);
     expect(getUi().plan).toBeNull();
+  });
+});
+
+describe('SYNC box on the page', () => {
+  const tap = (x: number, y: number) => [{stroke: {points: {get: async () => ({x, y})}}}];
+
+  it('a pen tap in the box opens the panel and runs a sync that closes itself after sending', async () => {
+    await runTasks();
+    fake.calls = [];
+    const box = computeLayout().syncBox;
+    await handleTap(tap((box.left + box.right) / 2, (box.top + box.bottom) / 2));
+    expect(fake.calls).toContain('NativePluginManager.showPluginView');
+    expect(getUi().plan).not.toBeNull();
+    expect(getUi().closeAfterSend).toBe(true);
+  });
+
+  it('a stroke anywhere else does nothing', async () => {
+    await runTasks();
+    fake.calls = [];
+    await handleTap(tap(300, 900));
+    expect(fake.calls).toEqual([]);
+  });
+
+  it('does nothing in a notebook the plugin did not make', async () => {
+    fake.open = '/storage/emulated/0/Note/Tana/Other.note';
+    const box = computeLayout().syncBox;
+    await handleTap(tap(box.left + 10, box.top + 10));
+    expect(fake.calls).not.toContain('NativePluginManager.showPluginView');
   });
 });
 
@@ -261,7 +348,7 @@ describe('Self-test', () => {
     mockWorker.sendReport.mockResolvedValue({});
     const insertText = api.insertText;
     delete (api as any).insertText; // this firmware lacks it
-    fake.open = '/storage/emulated/0/Note/Tana/2026-10-31.note';
+    fake.open = '/storage/emulated/0/Note/Tana/Notes 2026-10-31.note';
     fake.notes.set(fake.open, {template: 'x', pages: 1});
     await runSelfTest();
     const lines = getUi().lines.join('\n');

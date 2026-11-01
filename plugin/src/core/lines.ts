@@ -25,7 +25,7 @@ export interface WritingLine {
   bbox: Rect;
 }
 
-export const MAX_LEVEL = spec.writing.indentGuides;
+export const MAX_LEVEL = spec.notes.indentGuides;
 
 interface Measured {
   stroke: StrokeShape;

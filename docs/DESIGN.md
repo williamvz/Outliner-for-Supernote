@@ -224,17 +224,30 @@ These parts are unchanged from v1:
 
 ### 5.2 Rendering
 
-**Since v0.5 the page is drawn, not typed.** The plugin draws the whole page
-(header, the six task rows, the "done" and "not today" boxes, the ruled
-notes area) into a PNG on the device, writes it to `MyStyle/tana_today.png`
-and creates a notebook with `createNote` using that image as its background.
-Fonts are pre-rasterised from Inter (`tools/make_font.py`) and the PNG is
-encoded in plain JavaScript (`src/render/`). This needs only two device calls
-to show the page (create, open), and the page is crisp and exactly where
-`pageSpec.json` says it is. A new page for the same day is a new notebook
-(`2026-11-01.note`, `2026-11-01 b.note`, …), because a notebook's background
-image can be set at creation. Whether `insertNotePage` accepts an image path
-is documented as "template name" only, and is tested by the self-test.
+**Since v0.5 the page is drawn, not typed.** The plugin draws every page
+(header, task rows with a "done" box and a "Not today" box, ruled notes with
+numbered indent guides, and a SYNC box) into a PNG on the device, writes it to
+`MyStyle/tana_page.png` and makes a notebook page from it: `createNote` for the
+first page, `insertNotePage` with the image path for the next ones (the device
+accepts an image path there, though the docs only name templates). Fonts are
+pre-rasterised from Inter (`tools/make_font.py`) and the PNG is encoded in plain
+JavaScript (`src/render/`). Two notebooks per day:
+
+- **Tasks** (`Tasks <date>.note`): 14 rows a page, as many pages as it takes
+  (up to 12), P1 first. The plugin remembers which task is on which row, per
+  page, in its data directory.
+- **Notes** (`Notes <date>.note`): ruled lines with solid, numbered indent
+  guides. Tapping Notes while it is open adds a page.
+
+**The SYNC box.** The note app reports every finished pen stroke to the plugin.
+The plugin looks only at the first point of each; when it lies in the SYNC box
+of a notebook the plugin made, it opens the panel and syncs. The tap stays on
+the page as a small ink mark, which no zone reads.
+
+**Layout file.** `src/core/pageSpec.json` holds the numbers. It must not share
+a name with a code file: Metro tries `.json` before `.ts`, so `layout.json` hid
+`layout.ts` on the device and `computeLayout` was undefined (the cause of the
+"undefined is not a function" in v0.1–v0.4). A test guards it.
 
 *The text-box approach below was the v0.1 to v0.4 design, kept for reference.*
 
@@ -373,12 +386,10 @@ For each task:
 
 - **Filters** on top of any view: Priority (P1, P2, P3, P4, multi-select) and
   Domain (Home / Work / All).
-- **Sort order:** by an urgency score, most urgent first. Priority sets the
-  base (P1 100, P2 70, P3 40, P4 15). A deadline adds pressure: +25 when due
-  today, then +3 for each day late, up to 14 days. A later deadline subtracts
-  3 a day (up to 10 days). Being on today's day node adds 10. So a P1 due
-  today (125) beats a P2 nine days late (122), while an old P4 (82 after two
-  weeks) slowly climbs past a fresh P3 (65). Ties: older deadline, then name.
+- **Sort order:** strictly by priority (P1, P2, P3, P4; no priority counts as
+  P3), then the oldest due date first, tasks without a due date last, then by
+  name. An early version used a score that let very late low-priority tasks
+  climb; it was dropped, because the rule "all P1 first" is easier to trust.
 - **Not today:** a mark in the right-hand box sets the task's Deadline Date to
   tomorrow (unless it is already later). The task drops off today's list and
   comes back tomorrow, with its priority and lateness intact.

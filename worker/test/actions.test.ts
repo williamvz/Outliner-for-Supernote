@@ -6,7 +6,7 @@ import {
   rescheduledDeadline,
   tanaPaste,
 } from '../src/actions';
-import {compareTasks, todayView, urgency, type Task} from '../src/tasks';
+import {compareTasks, openTasks, todayView, type Task} from '../src/tasks';
 
 const TODAY = '2026-10-29';
 
@@ -97,35 +97,42 @@ describe('tanaPaste', () => {
   });
 });
 
-describe('urgency', () => {
-  it('ranks priority first, then lateness', () => {
-    const p1 = task({name: 'a', priority: 'P1', deadline: TODAY});
-    const p2 = task({name: 'b', priority: 'P2', deadline: TODAY});
-    expect(urgency(p1, TODAY)).toBe(125);
-    expect(urgency(p2, TODAY)).toBe(95);
+describe('task order', () => {
+  const names = (list: Task[]) => list.map(t => t.name);
+
+  it('puts every P1 before every P2, and so on, whatever the dates', () => {
+    const list = [
+      task({name: 'p3 old', priority: 'P3', deadline: '2026-01-01'}),
+      task({name: 'p1 new', priority: 'P1', deadline: '2026-12-31'}),
+      task({name: 'p4 old', priority: 'P4', deadline: '2026-01-01'}),
+      task({name: 'p2 old', priority: 'P2', deadline: '2026-01-01'}),
+    ];
+    expect(names(list.sort(compareTasks))).toEqual(['p1 new', 'p2 old', 'p3 old', 'p4 old']);
   });
 
-  it('lets an old low-priority task climb past a fresh higher one', () => {
-    const oldP4 = task({name: 'old', priority: 'P4', deadline: '2026-10-10'});
-    const freshP3 = task({name: 'fresh', priority: 'P3', deadline: TODAY});
-    expect(urgency(oldP4, TODAY)).toBeGreaterThan(urgency(freshP3, TODAY));
+  it('inside a priority, the oldest deadline is first and no deadline is last', () => {
+    const list = [
+      task({name: 'none', priority: 'P2'}),
+      task({name: 'newer', priority: 'P2', deadline: '2026-10-20'}),
+      task({name: 'older', priority: 'P2', deadline: '2026-10-01'}),
+    ];
+    expect(names(list.sort(compareTasks))).toEqual(['older', 'newer', 'none']);
   });
 
-  it('stops growing after two weeks of lateness', () => {
-    const a = task({name: 'a', priority: 'P3', deadline: '2026-10-01'});
-    const b = task({name: 'b', priority: 'P3', deadline: '2026-06-01'});
-    expect(urgency(a, TODAY)).toBe(urgency(b, TODAY));
+  it('counts a task without a priority as P3', () => {
+    const list = [task({name: 'plain'}), task({name: 'p2', priority: 'P2'}), task({name: 'p4', priority: 'P4'})];
+    expect(names(list.sort(compareTasks))).toEqual(['p2', 'plain', 'p4']);
   });
 
-  it('puts a later deadline below due-today at equal priority', () => {
-    const later = task({name: 'later', priority: 'P2', deadline: '2026-11-01', onDayNode: TODAY});
-    const due = task({name: 'due', priority: 'P2', deadline: TODAY});
-    expect(urgency(later, TODAY)).toBeLessThan(urgency(due, TODAY));
+  it('breaks ties by name', () => {
+    const a = task({name: 'b', priority: 'P3', deadline: '2026-10-29'});
+    const b = task({name: 'a', priority: 'P3', deadline: '2026-10-29'});
+    expect(names([a, b].sort(compareTasks))).toEqual(['a', 'b']);
   });
 });
 
-describe('todayView order', () => {
-  it('sorts by urgency and drops postponed and excluded tasks', () => {
+describe('todayView', () => {
+  it('drops postponed and excluded tasks and keeps the order', () => {
     const list = todayView(
       [
         task({name: 'p3 today', priority: 'P3', deadline: TODAY}),
@@ -136,12 +143,24 @@ describe('todayView order', () => {
       ],
       TODAY,
     ).map(t => t.name);
-    expect(list).toEqual(['p1 today', 'p4 late', 'p3 today']);
+    expect(list).toEqual(['p1 today', 'p3 today', 'p4 late']);
   });
+});
 
-  it('breaks ties by older deadline, then name', () => {
-    const a = task({name: 'b', priority: 'P3', deadline: '2026-10-29'});
-    const b = task({name: 'a', priority: 'P3', deadline: '2026-10-29'});
-    expect([a, b].sort((x, y) => compareTasks(x, y, TODAY)).map(t => t.name)).toEqual(['a', 'b']);
+describe('openTasks', () => {
+  const all = [
+    task({name: 'a', priority: 'P1', domain: 'Work'}),
+    task({name: 'b', priority: 'P2', domain: 'Home'}),
+    task({name: 'c', priority: 'P3'}),
+    task({name: '🤖 d', priority: 'P1', domain: 'Work'}),
+    task({name: 'Decide: e', priority: 'P1', domain: 'Work'}),
+  ];
+  it('lists every open task but routine and Decide: items', () => {
+    expect(openTasks(all, {priorities: [], domains: []}).map(t => t.name)).toEqual(['a', 'b', 'c']);
+  });
+  it('filters by priority and by domain', () => {
+    expect(openTasks(all, {priorities: ['P1', 'P3'], domains: []}).map(t => t.name)).toEqual(['a', 'c']);
+    expect(openTasks(all, {priorities: [], domains: ['Home']}).map(t => t.name)).toEqual(['b']);
+    expect(openTasks(all, {priorities: [], domains: ['Unsorted']}).map(t => t.name)).toEqual(['c']);
   });
 });

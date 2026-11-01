@@ -2,9 +2,9 @@ import {getJSON, setJSON} from '../storage';
 import type {NoteLine, SyncAction} from '../worker';
 
 /**
- * Per-page memory, kept in the plugin's data directory: which tasks sit on a
- * Today page, and what has already been sent, so a second Sync never sends
- * the same tick or line twice. Plus the offline outbox.
+ * Memory kept in the plugin's data directory: which tasks sit on each page of
+ * a Tasks notebook, what has already been sent (so a second Sync never sends
+ * the same tick or line twice), the task filters and the offline outbox.
  */
 
 export interface PageRow {
@@ -13,10 +13,12 @@ export interface PageRow {
   recurring: boolean;
 }
 
-export interface PageState {
+export interface NotebookState {
+  kind: 'tasks' | 'notes';
   file: string;
   date: string;
-  rows: PageRow[];
+  /** Tasks notebooks: the tasks on every page, row by row. */
+  pages: PageRow[][];
   /** Task ids already sent as done / not today. */
   sentDone: string[];
   sentSkip: string[];
@@ -28,13 +30,21 @@ export type OutboxItem =
   | {kind: 'sync'; actions: SyncAction[]; at: string}
   | {kind: 'notes'; day: string; key: string; lines: NoteLine[]; at: string};
 
-const pageKey = (file: string) => `page.${file.replace(/^.*\//, '').replace(/[^A-Za-z0-9_-]/g, '_')}`;
+export interface Filters {
+  priorities: string[];
+  domains: string[];
+}
 
-export const loadPage = (file: string) => getJSON<PageState | null>(pageKey(file), null);
-export const savePage = (state: PageState) => setJSON(pageKey(state.file), state);
+const key = (file: string) => `nb.${file.replace(/^.*\//, '').replace(/[^A-Za-z0-9_-]/g, '_')}`;
+
+export const loadNotebook = (file: string) => getJSON<NotebookState | null>(key(file), null);
+export const saveNotebook = (state: NotebookState) => setJSON(key(state.file), state);
 
 export const loadOutbox = () => getJSON<OutboxItem[]>('outbox', []);
 export const saveOutbox = (items: OutboxItem[]) => setJSON('outbox', items);
+
+export const loadFilters = () => getJSON<Filters>('filters', {priorities: [], domains: []});
+export const saveFilters = (filters: Filters) => setJSON('filters', filters);
 
 export interface CachedTasks {
   at: string;

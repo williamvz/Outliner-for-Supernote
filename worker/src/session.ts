@@ -17,7 +17,7 @@ import {
   type ServerMetadata,
   type Tokens,
 } from './oauth';
-import {FIELDS, taskFromNode, todayView, type Task} from './tasks';
+import {FIELDS, openTasks, taskFromNode, todayView, type Task} from './tasks';
 
 const SNAPSHOT_MAX_AGE_MS = 10 * 60 * 1000;
 const DOMAIN_MAX_AGE_MS = 24 * 60 * 60 * 1000;
@@ -99,6 +99,8 @@ export class TanaSession extends DurableObject<Env> {
           return await this.finishOAuth(url);
         case 'GET /tasks':
           return json(await this.tasks(url));
+        case 'GET /sync/log':
+          return json((await this.ctx.storage.get('sync.log')) ?? []);
         case 'POST /sync':
           return json(await this.sync(await request.json()));
         case 'POST /notes':
@@ -305,7 +307,15 @@ export class TanaSession extends DurableObject<Env> {
     }
     const job = await this.ctx.storage.get<Job>(JOB_KEY);
     const view = url.searchParams.get('view') ?? 'all';
-    const list = snapshot ? (view === 'today' ? todayView(snapshot.tasks, today) : snapshot.tasks) : [];
+    const filters = {
+      priorities: (url.searchParams.get('priority') ?? '').split(',').filter(Boolean),
+      domains: (url.searchParams.get('domain') ?? '').split(',').filter(Boolean),
+    };
+    const list = snapshot
+      ? view === 'today'
+        ? todayView(snapshot.tasks, today)
+        : openTasks(snapshot.tasks, filters)
+      : [];
     return {
       generatedAt: snapshot?.generatedAt ?? null,
       today,
@@ -495,6 +505,9 @@ export class TanaSession extends DurableObject<Env> {
       }
     }
     await this.patchSnapshot(results, today);
+    const log = (await this.ctx.storage.get<unknown[]>('sync.log')) ?? [];
+    log.unshift({at: new Date().toISOString(), results});
+    await this.ctx.storage.put('sync.log', log.slice(0, 30));
     return {today, results};
   }
 

@@ -74,7 +74,16 @@ async function request(path: string, init: RequestInit = {}, timeoutMs = 10000) 
 
 export const health = () => request('/health') as Promise<{ok: boolean; tana: string; workspace: string | null}>;
 
-export const getTasks = () => request('/tasks?view=today', {}, 15000) as Promise<TasksResponse>;
+export const getTasks = (filters: {priorities: string[]; domains: string[]} = {priorities: [], domains: []}) => {
+  const query = [
+    'view=all',
+    filters.priorities.length ? `priority=${filters.priorities.join(',')}` : '',
+    filters.domains.length ? `domain=${filters.domains.join(',')}` : '',
+  ]
+    .filter(Boolean)
+    .join('&');
+  return request(`/tasks?${query}`, {}, 15000) as Promise<TasksResponse>;
+};
 
 export const postSync = (actions: SyncAction[]) =>
   request('/sync', {method: 'POST', body: JSON.stringify({actions})}, 30000) as Promise<{

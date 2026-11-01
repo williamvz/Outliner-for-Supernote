@@ -9,12 +9,15 @@ import {name as appName} from './app.json';
 import {version} from './package.json';
 import {show} from './src/nav';
 import {logEvent, loadSaved} from './src/spike/report';
+import {runNotes} from './src/app/notes';
 import {runSync} from './src/app/sync';
-import {runToday} from './src/app/today';
+import {registerSyncTap} from './src/app/syncTap';
+import {runTasks} from './src/app/tasks';
 
-const BUTTON_TODAY = 100;
+const BUTTON_TASKS = 100;
 const BUTTON_SYNC = 101;
 const BUTTON_PANEL = 102;
+const BUTTON_NOTES = 103;
 
 const TOOLBAR = 1;
 const WITH_UI = 1;
@@ -29,9 +32,16 @@ logEvent(`plugin loaded, v${version}`);
 
 // Today and Sync open the plugin view so progress and errors are visible.
 PluginManager.registerButton(TOOLBAR, ['NOTE'], {
-  id: BUTTON_TODAY,
-  name: 'Today',
+  id: BUTTON_TASKS,
+  name: 'Tasks',
   icon: icon(require('./assets/icons/today.png')),
+  showType: WITH_UI,
+});
+
+PluginManager.registerButton(TOOLBAR, ['NOTE'], {
+  id: BUTTON_NOTES,
+  name: 'Notes',
+  icon: icon(require('./assets/icons/notes.png')),
   showType: WITH_UI,
 });
 
@@ -53,9 +63,13 @@ PluginManager.registerButtonListener({
   onButtonPress(event) {
     logEvent(`button ${JSON.stringify(event)} (id is ${typeof event?.id})`);
     switch (Number(event?.id)) {
-      case BUTTON_TODAY:
+      case BUTTON_TASKS:
         show('report');
-        runToday();
+        runTasks();
+        break;
+      case BUTTON_NOTES:
+        show('report');
+        runNotes();
         break;
       case BUTTON_SYNC:
         show('report');
@@ -77,3 +91,4 @@ PluginManager.registerConfigButtonListener({
   },
 });
 
+registerSyncTap();

@@ -2,10 +2,12 @@ import React, {useEffect, useState} from 'react';
 import {Pressable, ScrollView, StyleSheet, Text, TextInput, View} from 'react-native';
 import {PluginManager} from 'sn-plugin-lib';
 import {version} from './package.json';
-import {applyPlan, runSync, type SyncPlan} from './src/app/sync';
-import {runSelfTest} from './src/app/selftest';
+import {runNotes} from './src/app/notes';
 import {outboxSize} from './src/app/outbox';
-import {runToday} from './src/app/today';
+import {runSelfTest} from './src/app/selftest';
+import {loadFilters, saveFilters, type Filters} from './src/app/store';
+import {applyPlan, runSync, type SyncPlan} from './src/app/sync';
+import {runTasks} from './src/app/tasks';
 import {getUi, onUi, setUi, type UiState} from './src/app/ui';
 import {loadConfig, saveConfig} from './src/config';
 import {currentScreen, onScreen, show, type Screen} from './src/nav';
@@ -13,8 +15,9 @@ import {allFindings, describeError, eventLog, onChange} from './src/spike/report
 import {sendReport} from './src/worker';
 
 /**
- * The plugin panel: Today, Sync, Self-test and Config. E-ink rules: black on
- * white, big targets, no animation, no press feedback.
+ * The plugin panel: Tasks, Notes, Sync and the settings. E-ink rules: black
+ * on white, no animation, no press feedback. Buttons are about as big as the
+ * boxes on the page.
  */
 function App(): React.JSX.Element {
   const [screen, setScreen] = useState<Screen>(currentScreen());
@@ -22,36 +25,72 @@ function App(): React.JSX.Element {
   return <View style={styles.root}>{screen === 'config' ? <ConfigScreen /> : <MainScreen />}</View>;
 }
 
-function Button({label, onPress, disabled}: {label: string; onPress: () => void; disabled?: boolean}) {
+function Button({
+  label,
+  onPress,
+  disabled,
+  selected,
+}: {
+  label: string;
+  onPress: () => void;
+  disabled?: boolean;
+  selected?: boolean;
+}) {
   return (
     <Pressable
       onPress={disabled ? undefined : onPress}
-      style={[styles.button, disabled && styles.buttonOff]}
+      style={[styles.button, selected && styles.buttonOn, disabled && styles.buttonOff]}
       android_disableSound>
-      <Text style={[styles.buttonText, disabled && styles.buttonTextOff]}>{label}</Text>
+      <Text style={[styles.buttonText, selected && styles.buttonTextOn, disabled && styles.buttonTextOff]}>
+        {label}
+      </Text>
     </Pressable>
   );
 }
+
+const PRIORITIES = ['P1', 'P2', 'P3', 'P4'];
+const DOMAINS = ['Home', 'Work'];
 
 function MainScreen() {
   const [ui, setLocal] = useState<UiState>(getUi());
   const [log, setLog] = useState(eventLog());
   const [queued, setQueued] = useState(0);
+  const [filters, setFilters] = useState<Filters>({priorities: [], domains: []});
   useEffect(() => onUi(setLocal), []);
   useEffect(() => onChange(() => setLog(eventLog())), []);
   useEffect(() => {
     outboxSize().then(setQueued).catch(() => undefined);
   }, [ui.busy]);
+  useEffect(() => {
+    loadFilters().then(setFilters).catch(() => undefined);
+  }, []);
+
+  const toggle = (kind: keyof Filters, value: string) => {
+    const has = filters[kind].includes(value);
+    const next = {...filters, [kind]: has ? filters[kind].filter(v => v !== value) : [...filters[kind], value]};
+    setFilters(next);
+    saveFilters(next).catch(() => undefined);
+  };
 
   return (
     <>
       <Text style={styles.title}>{ui.title}</Text>
       <View style={styles.row}>
-        <Button label="Today" onPress={() => runToday()} disabled={ui.busy} />
+        <Button label="Tasks" onPress={() => runTasks()} disabled={ui.busy} />
+        <Button label="Notes" onPress={() => runNotes()} disabled={ui.busy} />
         <Button label="Sync" onPress={() => runSync()} disabled={ui.busy} />
-        <Button label="Self-test" onPress={() => runSelfTest()} disabled={ui.busy} />
         <Button label="Config" onPress={() => show('config')} disabled={ui.busy} />
         <Button label="Close" onPress={() => PluginManager.closePluginView()} />
+      </View>
+      <View style={styles.row}>
+        <Text style={styles.filterLabel}>Show</Text>
+        {PRIORITIES.map(p => (
+          <Button key={p} label={p} selected={filters.priorities.includes(p)} onPress={() => toggle('priorities', p)} />
+        ))}
+        {DOMAINS.map(d => (
+          <Button key={d} label={d} selected={filters.domains.includes(d)} onPress={() => toggle('domains', d)} />
+        ))}
+        <Text style={styles.filterHint}>(none selected = all)</Text>
       </View>
 
       {ui.plan ? <PlanView plan={ui.plan} busy={ui.busy} /> : null}
@@ -59,8 +98,9 @@ function MainScreen() {
       <ScrollView style={styles.lines}>
         {ui.lines.length === 0 ? (
           <Text style={styles.hint}>
-            Today makes a page with your most urgent tasks. Tick a box, or mark NOT TODAY, and write notes
-            below the line. Then tap Sync.
+            Tasks makes a notebook with all your open tasks, one page for every 14. Tick a box for done,
+            mark the arrow box for not today. Notes is today's page for writing. Tap the SYNC box on a
+            page (or Sync here) to send it to Tana.
           </Text>
         ) : (
           ui.lines.map((line, i) => (
@@ -72,7 +112,7 @@ function MainScreen() {
       </ScrollView>
 
       <View style={styles.footer}>
-        {log.slice(-3).map(entry => (
+        {log.slice(-2).map(entry => (
           <Text key={entry.at + entry.msg} style={styles.logLine} numberOfLines={1}>
             {entry.at.slice(11, 19)} {entry.msg}
           </Text>
@@ -82,7 +122,12 @@ function MainScreen() {
             v{version}
             {queued ? `  ·  ${queued} change${queued === 1 ? '' : 's'} waiting to send` : ''}
           </Text>
-          <SendReport />
+          <View style={styles.footerLinks}>
+            <Pressable onPress={() => runSelfTest()} disabled={ui.busy} android_disableSound>
+              <Text style={styles.link}>Self-test</Text>
+            </Pressable>
+            <SendReport />
+          </View>
         </View>
       </View>
     </>
@@ -100,7 +145,7 @@ function SendReport() {
           .catch(e => setMessage(describeError(e)));
       }}
       android_disableSound>
-      <Text style={styles.link}>{message || 'Send report'}</Text>
+      <Text style={[styles.link, styles.linkGap]}>{message || 'Send report'}</Text>
     </Pressable>
   );
 }
@@ -123,7 +168,7 @@ function PlanView({plan, busy}: {plan: SyncPlan; busy: boolean}) {
       {plan.notes.map(n => (
         <Text key={n.key} style={styles.planLine}>
           {'    '.repeat(n.level)}
-          {n.isTask ? '☐ ' : '- '}
+          {n.isTask ? '[ ] ' : '- '}
           {n.text}
         </Text>
       ))}
@@ -168,10 +213,7 @@ function ConfigScreen() {
         placeholder="four words with spaces"
       />
       <View style={styles.row}>
-        <Button
-          label="Save"
-          onPress={() => saveConfig({workerUrl, passphrase}).then(() => setMessage('Saved'))}
-        />
+        <Button label="Save" onPress={() => saveConfig({workerUrl, passphrase}).then(() => setMessage('Saved'))} />
         <Button label="Back" onPress={() => show('report')} />
       </View>
       {message ? <Text style={styles.line}>{message}</Text> : null}
@@ -180,39 +222,47 @@ function ConfigScreen() {
 }
 
 const styles = StyleSheet.create({
-  root: {flex: 1, backgroundColor: '#ffffff', padding: 32},
-  title: {fontSize: 38, fontWeight: 'bold', color: '#000000', marginBottom: 20},
-  row: {flexDirection: 'row', flexWrap: 'wrap', marginBottom: 12},
+  root: {flex: 1, backgroundColor: '#ffffff', padding: 24},
+  title: {fontSize: 30, fontWeight: 'bold', color: '#000000', marginBottom: 10},
+  row: {flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', marginBottom: 6},
   button: {
-    borderWidth: 3,
+    borderWidth: 2,
     borderColor: '#000000',
-    paddingVertical: 20,
-    paddingHorizontal: 30,
-    marginRight: 16,
-    marginBottom: 12,
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    marginRight: 10,
+    marginBottom: 8,
+    minWidth: 60,
+    alignItems: 'center',
   },
+  buttonOn: {backgroundColor: '#000000'},
   buttonOff: {borderColor: '#999999'},
-  buttonText: {fontSize: 30, color: '#000000', fontWeight: 'bold'},
+  buttonText: {fontSize: 22, color: '#000000', fontWeight: 'bold'},
+  buttonTextOn: {color: '#ffffff'},
   buttonTextOff: {color: '#999999'},
-  lines: {flex: 1, marginTop: 8},
-  line: {fontSize: 26, color: '#000000', marginBottom: 6},
-  hint: {fontSize: 26, color: '#444444', lineHeight: 36},
-  plan: {borderWidth: 3, borderColor: '#000000', padding: 18, marginBottom: 14},
-  planTitle: {fontSize: 30, fontWeight: 'bold', color: '#000000', marginBottom: 10},
-  planLine: {fontSize: 26, color: '#000000', marginBottom: 6},
-  footer: {borderTopWidth: 2, borderColor: '#000000', paddingTop: 8},
+  filterLabel: {fontSize: 22, color: '#000000', marginRight: 10, marginBottom: 8},
+  filterHint: {fontSize: 18, color: '#555555', marginBottom: 8},
+  lines: {flex: 1, marginTop: 4},
+  line: {fontSize: 22, color: '#000000', marginBottom: 4},
+  hint: {fontSize: 22, color: '#444444', lineHeight: 30},
+  plan: {borderWidth: 2, borderColor: '#000000', padding: 12, marginBottom: 10},
+  planTitle: {fontSize: 24, fontWeight: 'bold', color: '#000000', marginBottom: 6},
+  planLine: {fontSize: 22, color: '#000000', marginBottom: 4},
+  footer: {borderTopWidth: 2, borderColor: '#000000', paddingTop: 6},
   footerRow: {flexDirection: 'row', justifyContent: 'space-between'},
-  logLine: {fontSize: 20, color: '#333333'},
-  link: {fontSize: 22, color: '#000000', textDecorationLine: 'underline'},
-  label: {fontSize: 28, color: '#000000', marginTop: 12},
+  footerLinks: {flexDirection: 'row'},
+  logLine: {fontSize: 18, color: '#333333'},
+  link: {fontSize: 20, color: '#000000', textDecorationLine: 'underline'},
+  linkGap: {marginLeft: 20},
+  label: {fontSize: 22, color: '#000000', marginTop: 8},
   input: {
     borderWidth: 2,
     borderColor: '#000000',
-    fontSize: 28,
+    fontSize: 22,
     color: '#000000',
-    padding: 14,
-    marginTop: 8,
-    marginBottom: 8,
+    padding: 8,
+    marginTop: 6,
+    marginBottom: 6,
   },
 });
 

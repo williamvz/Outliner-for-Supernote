@@ -84,44 +84,17 @@ export function dayFromBreadcrumb(breadcrumb: string[], today: string): string |
   return parsed;
 }
 
-const PRIORITY_POINTS: Record<string, number> = {P1: 100, P2: 70, P3: 40, P4: 15};
-const DUE_TODAY_POINTS = 25;
-const OVERDUE_POINTS_PER_DAY = 3;
-const OVERDUE_MAX_DAYS = 14;
-const ON_DAY_NODE_POINTS = 10;
-const FUTURE_POINTS_PER_DAY = 3;
-const FUTURE_MAX_DAYS = 10;
+const RANK: Record<string, number> = {P1: 1, P2: 2, P3: 3, P4: 4};
 
 /**
- * How much a task wants attention today. Priority sets the base; the deadline
- * adds pressure that grows for two weeks of lateness, so an old P4 slowly
- * climbs past a fresh P2 instead of sinking forever. A task you put on
- * today's day node gets a nudge, and one with a later deadline loses a little.
- *
- *   P1 due today 125 · P2 due today 95 · P3 due today 65 · P4 due today 40
- *   P2 a week late 116 · P3 a week late 86 · P4 two weeks late 82
+ * Strictly by priority (P1 first; a task without one counts as P3), then the
+ * oldest deadline first, tasks without a deadline last, then by name.
  */
-export function urgency(task: Task, today: string): number {
-  let score = PRIORITY_POINTS[task.priority ?? 'P3'];
-  if (task.deadline) {
-    const late = daysBetween(task.deadline, today);
-    if (late >= 0) {
-      score += DUE_TODAY_POINTS + OVERDUE_POINTS_PER_DAY * Math.min(late, OVERDUE_MAX_DAYS);
-    } else {
-      score -= FUTURE_POINTS_PER_DAY * Math.min(-late, FUTURE_MAX_DAYS);
-    }
-  }
-  if (task.onDayNode === today) {
-    score += ON_DAY_NODE_POINTS;
-  }
-  return score;
-}
-
-/** Most urgent first; ties go to the older deadline, then the name. */
-export function compareTasks(a: Task, b: Task, today: string): number {
-  const diff = urgency(b, today) - urgency(a, today);
-  if (diff !== 0) {
-    return diff;
+export function compareTasks(a: Task, b: Task): number {
+  const pa = RANK[a.priority ?? 'P3'];
+  const pb = RANK[b.priority ?? 'P3'];
+  if (pa !== pb) {
+    return pa - pb;
   }
   if (a.deadline !== b.deadline) {
     if (!a.deadline) {
@@ -146,5 +119,19 @@ export function todayView(tasks: Task[], today: string): Task[] {
         t.onDayNode === today ||
         (!t.someday && t.deadline !== null && daysBetween(t.deadline, today) >= 0),
     )
-    .sort((a, b) => compareTasks(a, b, today));
+    .sort(compareTasks);
+}
+
+export interface Filters {
+  priorities: string[];
+  domains: string[];
+}
+
+/** Every open task for the Tasks notebook: routine (🤖) and Decide: items stay out. */
+export function openTasks(tasks: Task[], filters: Filters): Task[] {
+  return tasks
+    .filter(t => !EXCLUDED_PREFIX.test(t.name.trim()))
+    .filter(t => !filters.priorities.length || filters.priorities.includes(t.priority ?? 'P3'))
+    .filter(t => !filters.domains.length || filters.domains.includes(t.domain ?? 'Unsorted'))
+    .sort(compareTasks);
 }

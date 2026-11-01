@@ -1,5 +1,5 @@
 import {computeLayout} from '../core/layout';
-import {drawTodayPage} from '../render/page';
+import {drawTasksPage} from '../render/page';
 import {encodeGrayPng, toBase64} from '../render/png';
 import {
   createElement,
@@ -31,7 +31,7 @@ import {
 import {getJSON, nativeModuleInventory, setJSON, storageName, writeBinary} from '../storage';
 import {allFindings, describeError, eventLog, record, stackHint, timed} from '../spike/report';
 import {health, sendReport} from '../worker';
-import {NOTE_DIR, ROOT} from './today';
+import {NOTE_DIR, ROOT} from './paths';
 import {begin, end, say} from './ui';
 
 const SCRATCH = `${NOTE_DIR}/_selftest.note`;
@@ -140,10 +140,11 @@ export async function runSelfTest(): Promise<void> {
 
     await probe('write template image', async () => {
       await FileUtils.makeDir(`${ROOT}/MyStyle`);
-      const c = drawTodayPage({
+      const c = drawTasksPage({
         title: 'Self-test',
         subtitle: 'scratch page',
-        tasks: [{name: 'A task on the scratch page', priority: 'P2', domain: 'Work', recurring: false, due: 'today'}],
+        tasks: [{name: 'A task on the scratch page', priority: 'P2', domain: 'Work', recurring: false, due: 'Due today'}],
+        footer: 'Page 1 of 1',
       });
       const png = encodeGrayPng(c.width, c.height, c.pixels);
       const bytes = await writeBinary(SCRATCH_TEMPLATE, toBase64(png));
@@ -170,7 +171,7 @@ export async function runSelfTest(): Promise<void> {
 
     await probe('page size from file', async () => {
       const size = await pageSizeOf(SCRATCH, 0);
-      const layout = computeLayout(size.width, size.height);
+      const layout = computeLayout(size.width, size.height, 'tasks');
       return `${size.width}x${size.height}, rows ${layout.rows.length}`;
     });
 
