@@ -100,7 +100,6 @@ bearer token.
 cd plugin && npm ci
 npm test && npm run typecheck && npm run lint
 bash buildPlugin.sh                 # → build/outputs/TanaSync.snplg
-python3 tools/make_template.py      # after changing src/core/layout.json
 
 cd ../worker && npm ci
 npm test && npm run typecheck

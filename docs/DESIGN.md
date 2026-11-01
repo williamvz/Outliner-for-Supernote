@@ -6,7 +6,7 @@ sideloaded app with a separate canvas) is superseded: the plugin route is
 confirmed.
 
 The screens below are mockups at the Nomad's resolution (1404 × 1872), drawn
-from the same `layout.json` and template the plugin uses. Handwriting is
+from the same `pageSpec.json` and template the plugin uses. Handwriting is
 simulated with a handwriting font.
 
 ## TL;DR
@@ -231,7 +231,7 @@ and creates a notebook with `createNote` using that image as its background.
 Fonts are pre-rasterised from Inter (`tools/make_font.py`) and the PNG is
 encoded in plain JavaScript (`src/render/`). This needs only two device calls
 to show the page (create, open), and the page is crisp and exactly where
-`layout.json` says it is. A new page for the same day is a new notebook
+`pageSpec.json` says it is. A new page for the same day is a new notebook
 (`2026-11-01.note`, `2026-11-01 b.note`, …), because a notebook's background
 image can be set at creation. Whether `insertNotePage` accepts an image path
 is documented as "template name" only, and is tested by the self-test.

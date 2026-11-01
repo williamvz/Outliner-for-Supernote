@@ -9,7 +9,7 @@ import {
   type StrokeShape,
 } from './geometry';
 import {BASE_HEIGHT, type PageLayout} from './layout';
-import spec from './layout.json';
+import spec from './pageSpec.json';
 
 export type LineMarker = 'dash' | 'box' | null;
 

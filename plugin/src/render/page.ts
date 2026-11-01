@@ -1,6 +1,6 @@
 import type {PageLayout} from '../core/layout';
 import {computeLayout} from '../core/layout';
-import spec from '../core/layout.json';
+import spec from '../core/pageSpec.json';
 import {Canvas} from './canvas';
 
 /**

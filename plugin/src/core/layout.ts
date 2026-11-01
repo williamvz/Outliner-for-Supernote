@@ -1,4 +1,4 @@
-import spec from './layout.json';
+import spec from './pageSpec.json';
 import type {Rect} from './geometry';
 
 /**
