@@ -60,7 +60,7 @@ describe('taskFromNode', () => {
 });
 
 describe('todayView', () => {
-  it('keeps due, overdue and day-node tasks, sorted by priority then deadline', () => {
+  it('keeps due, overdue and day-node tasks, most urgent first', () => {
     const tasks = [
       task({name: 'later', priority: 'P1', deadline: '2026-11-03'}),
       task({name: 'overdue P2', priority: 'P2', deadline: '2026-10-20'}),

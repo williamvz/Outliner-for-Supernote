@@ -224,6 +224,20 @@ These parts are unchanged from v1:
 
 ### 5.2 Rendering
 
+**Since v0.5 the page is drawn, not typed.** The plugin draws the whole page
+(header, the six task rows, the "done" and "not today" boxes, the ruled
+notes area) into a PNG on the device, writes it to `MyStyle/tana_today.png`
+and creates a notebook with `createNote` using that image as its background.
+Fonts are pre-rasterised from Inter (`tools/make_font.py`) and the PNG is
+encoded in plain JavaScript (`src/render/`). This needs only two device calls
+to show the page (create, open), and the page is crisp and exactly where
+`layout.json` says it is. A new page for the same day is a new notebook
+(`2026-11-01.note`, `2026-11-01 b.note`, …), because a notebook's background
+image can be set at creation. Whether `insertNotePage` accepts an image path
+is documented as "template name" only, and is tested by the self-test.
+
+*The text-box approach below was the v0.1 to v0.4 design, kept for reference.*
+
 - Text boxes go on the **main layer**. The SDK only allows text boxes there,
   so plugin text and your ink share a layer. They are inserted as
   **non-editable** (`textEditable: 1`) in one batch (`insertPageElements`).
@@ -359,7 +373,15 @@ For each task:
 
 - **Filters** on top of any view: Priority (P1, P2, P3, P4, multi-select) and
   Domain (Home / Work / All).
-- **Sort order:** P1 → P4, then oldest deadline first.
+- **Sort order:** by an urgency score, most urgent first. Priority sets the
+  base (P1 100, P2 70, P3 40, P4 15). A deadline adds pressure: +25 when due
+  today, then +3 for each day late, up to 14 days. A later deadline subtracts
+  3 a day (up to 10 days). Being on today's day node adds 10. So a P1 due
+  today (125) beats a P2 nine days late (122), while an old P4 (82 after two
+  weeks) slowly climbs past a fresh P3 (65). Ties: older deadline, then name.
+- **Not today:** a mark in the right-hand box sets the task's Deadline Date to
+  tomorrow (unless it is already later). The task drops off today's list and
+  comes back tomorrow, with its priority and lateness intact.
 - **Paging:** 6 rows on the page, 8 in the panel, with ‹ Prev / Next › and
   "2 / 6".
 
@@ -399,6 +421,14 @@ Undoing a recurring completion is manual in Tana.
 ## 7. Worker API
 
 Requests from the device send `Authorization: Bearer <device token>`.
+
+**Built in v0.5** (with the passphrase as bearer token, until pairing exists):
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /tasks?view=today` | The urgency-sorted Today list (see §6.2). |
+| `POST /sync` | `{actions:[{type:"done"\|"postpone", id}]}`. Checks the node (a recurring task gets its deadline moved forward by *Occurrence*, repeated until after today, instead of being checked), or sets Deadline Date to tomorrow. Safe to repeat. Returns a result per action. |
+| `POST /notes` | `{day, key, lines:[{level,text,isTask}]}`. Imports the lines as nodes on that day's node with `import_tana_paste`, once per `key`. |
 
 **Pairing** (§5.7), without a device token:
 

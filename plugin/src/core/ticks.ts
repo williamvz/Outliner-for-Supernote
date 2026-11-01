@@ -9,12 +9,14 @@ import {
 } from './geometry';
 import type {PageLayout} from './layout';
 
-export type TaskStrokeKind = 'tick' | 'strike' | 'writing';
+export type TaskStrokeKind = 'tick' | 'strike' | 'skip' | 'writing';
 
 export interface RowMarks {
   row: number;
   /** True when the row holds at least one tick or strike-through. */
   done: boolean;
+  /** True when the "Not today" box has a mark. Done wins when both are marked. */
+  skip: boolean;
   tickStrokeIds: string[];
   writingStrokeIds: string[];
 }
@@ -24,8 +26,9 @@ const ROW_SHARE = 0.6;
 
 /**
  * Reads pen strokes in the task zone. A tick (anywhere around the checkbox) or
- * a long flat stroke across the task text means "done"; anything else in a
- * row is handwriting (a new task in an empty row, or an annotation).
+ * a long flat stroke across the task text means "done"; any mark in the right
+ * hand box means "not today". Anything else in a row is handwriting (a new
+ * task in an empty row, or an annotation).
  */
 export function readTaskZone(
   strokes: StrokeShape[],
@@ -34,6 +37,7 @@ export function readTaskZone(
   const marks: RowMarks[] = layout.rows.map(r => ({
     row: r.index,
     done: false,
+    skip: false,
     tickStrokeIds: [],
     writingStrokeIds: [],
   }));
@@ -49,6 +53,9 @@ export function readTaskZone(
     const kind = classifyStroke(stroke, layout, row);
     if (kind === 'writing') {
       marks[row].writingStrokeIds.push(stroke.id);
+    } else if (kind === 'skip') {
+      marks[row].skip = true;
+      marks[row].tickStrokeIds.push(stroke.id);
     } else {
       marks[row].done = true;
       marks[row].tickStrokeIds.push(stroke.id);
@@ -82,10 +89,13 @@ export function classifyStroke(
   if (contains(near, c) && width(box) <= width(r.checkbox) * 2.2) {
     return 'tick';
   }
-  const textWidth = r.meta.right - r.text.left;
+  const nearSkip = inflate(r.skip, width(r.skip) * 0.4);
+  if (contains(nearSkip, c) && width(box) <= width(r.skip) * 2.2) {
+    return 'skip';
+  }
   const flat = height(box) <= height(r.band) * 0.5;
   const long = width(box) >= (r.text.right - r.text.left) * 0.35;
-  const overText = c.x >= r.text.left && c.x <= r.text.left + textWidth;
+  const overText = c.x >= r.text.left && c.x <= r.meta.right;
   if (flat && long && overText) {
     return 'strike';
   }

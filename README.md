@@ -10,22 +10,26 @@ Nomad to Tana Outliner:
 
 The full design is in [docs/DESIGN.md](docs/DESIGN.md).
 
-**Status: M0 spike.** The current code answers the open questions in
-DESIGN.md §10 on a real device. It does not write anything to Tana yet,
-except one clearly marked test node, and only when you ask for it.
+**Status: v0.5, first full build of the daily loop.** Today draws your most
+urgent tasks onto a page, Sync reads your ticks and handwriting and (after you
+confirm) updates Tana. It has been tested against a scripted device and a
+mock of Tana, and has **not yet been confirmed on a Nomad**: the **Self-test**
+button exists to find out, in one run, which device calls work on your
+firmware.
 
 ## Layout
 
 | Path | What |
 | --- | --- |
 | `plugin/` | React Native Supernote plugin (`sn-plugin-lib`), built into `TanaSync.snplg` |
-| `plugin/src/core/` | Page logic without device dependencies, with unit tests: page layout, tick detection, grouping strokes into lines and indent levels, outline rules |
-| `plugin/src/spike/` | Spike actions behind the toolbar buttons, plus the report |
-| `plugin/tools/` | Scripts that draw the page template and toolbar icons from `layout.json` |
-| `worker/` | Cloudflare Worker. It logs in to Tana's hosted MCP (OAuth), builds the task snapshot, and receives spike reports |
+| `plugin/src/app/` | The flows: Today, Sync, the offline outbox, the Self-test, panel state |
+| `plugin/src/render/` | Draws the Today page in plain JavaScript: PNG encoder, bitmap font, page layout |
+| `plugin/src/core/` | Reading the pen: tick and "Not today" detection, grouping strokes into lines and indent levels, outline rules. Unit-tested |
+| `plugin/tools/` | Scripts that draw the toolbar icons and the font atlas |
+| `worker/` | Cloudflare Worker. It logs in to Tana's hosted MCP (OAuth), builds the task snapshot, and applies your ticks and notes |
 | `.github/workflows/ci.yml` | Typecheck, lint and tests for both parts. Builds the `.snplg` as a downloadable artifact |
 
-## Try the spike on the Nomad
+## Use it on the Nomad
 
 1. **Download the plugin.** Open the latest **CI** run on `main` on GitHub and
    download the **TanaSync-snplg** artifact. Unzip it to get
@@ -39,28 +43,28 @@ except one clearly marked test node, and only when you ask for it.
 4. **Allow file access.** In *Settings → Apps → Plugins → Tana Sync*, allow
    file read and write (**Always allow**). Internet access is asked on first
    use.
-5. **Find the buttons.** Open any notebook. The toolbar has **Today**,
-   **Sync**, **Tana** and **Ping**. The Tana panel also has **Today page** and
-   **Sync page** buttons that do the same as the toolbar ones.
-6. **Configure the Worker.** Tap **Tana**, then **Config**. Enter the Worker
-   URL and the device passphrase and tap **Save**. They are kept across
-   restarts. Then tap **Run checks**: the network and device API lines should
-   pass.
-7. **Create a page.** Tap **Today**. A status screen opens. The plugin
-   creates `Note/Tana/Spike.note` with a templated page and up to six tasks,
-   then closes the screen and shows the page. If the screen opens but nothing
-   happens, tap **Today page** on it.
-8. **Write on the page.**
-   - Tick two tasks: one in the box, one by striking it through.
-   - Below the line, write a few lines with dashes and indentation.
-   - Write one line starting with a small box ☐.
-9. **Sync.** On that page, tap **Sync**. The status screen shows what was
-   read, and the status line on the page updates. If nothing happens, tap
-   **Sync page** on the screen.
-10. **Ping.** Tap **Ping** once. It opens nothing; it tests whether a button
-    without a screen reaches the plugin.
-11. **Report.** Tap **Tana**, then **Send report**. The activity box at the
-    top shows the latest steps and errors.
+5. **Configure.** Open any notebook and tap **Tana** in the toolbar. Tap
+   **Config**, enter the Worker URL and the device passphrase, tap **Save**,
+   then **Back**.
+6. **Self-test (first time).** Tap **Self-test**. It tries every device call
+   the plugin needs and lists PASS or FAIL for each, then uploads the result.
+   Write something on a page first if you want it to test reading strokes.
+7. **Today.** Tap **Today**. The plugin creates `Note/Tana/<date>.note` with
+   your six most urgent tasks and opens it. Tap Today again for a fresh page
+   (`<date> b.note`, …), for example after you have worked through the first.
+8. **Work the page.**
+   - Tick the box left of a task, or strike through it: **done**.
+   - Mark the arrow box on the right: **not today**. The task moves to tomorrow.
+   - Write below the line. A dash starts a note, indenting makes it a
+     sub-note, a small box makes it a task.
+9. **Sync.** Tap **Sync**. It lists what it found. Check the recognised
+   handwriting, then tap **Send to Tana**. Without a connection, the changes
+   wait in an outbox and go out at the next Sync or Today.
+
+Everything written to Tana is in English; nothing is ever deleted from Tana by
+a mark on paper.
+
+![The Today page, as the plugin draws it](docs/mockups/today-page-v05.png)
 
 ## Worker
 
@@ -68,7 +72,7 @@ except one clearly marked test node, and only when you ask for it.
 cd worker
 npm ci
 npx wrangler login
-npx wrangler deploy
+npx wrangler deploy        # also after every update: /sync and /notes are new in v0.5
 # sha256 of the passphrase (macOS: shasum -a 256, Linux: sha256sum)
 printf '%s' 'four random words here' | shasum -a 256 | cut -d' ' -f1 | npx wrangler secret put DEVICE_TOKEN_HASH
 ```
@@ -80,10 +84,12 @@ browser and approve. After that, `/health` reports `"tana": "linked"`.
 | --- | --- |
 | `GET /health` | Shows whether Tana is linked and how old the task snapshot is |
 | `GET /oauth/start`, `GET /oauth/callback` | One-time link to Tana |
-| `GET /tasks?view=today\|all` | Task snapshot. Rebuilt when older than 10 minutes, or with `&fresh=1` |
-| `POST /spike/report`, `GET /spike/report` | Spike findings sent from the Nomad |
+| `GET /tasks?view=today\|all` | Task snapshot, most urgent first. Rebuilt when older than 10 minutes, or with `&fresh=1` |
+| `POST /sync` | Applies `done` and `postpone` ("Not today") actions to tasks in Tana |
+| `POST /notes` | Imports handwritten notes as nodes on a day's node |
+| `POST /spike/report`, `GET /spike/report` | Findings and the event log sent from the Nomad |
 | `GET /spike/mcp` | Diagnostics: MCP tools, snapshot timing and counts |
-| `POST /spike/import-test` | Spike Q7: imports one "Supernote sync test" node on today's day node and returns Tana's raw reply |
+| `POST /spike/import-test` | Imports one "Supernote sync test" node on today's day node and returns Tana's raw reply |
 
 Every endpoint except `/` and `/oauth/callback` needs the passphrase as a
 bearer token.

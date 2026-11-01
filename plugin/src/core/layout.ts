@@ -28,6 +28,8 @@ export interface TaskRow {
   index: number;
   band: Rect;
   checkbox: Rect;
+  /** The "Not today" box at the right edge of the row. */
+  skip: Rect;
   text: Rect;
   meta: Rect;
 }
@@ -64,6 +66,12 @@ export function computeLayout(
         boxTop,
         tasks.checkboxLeft + tasks.checkboxSize,
         boxTop + tasks.checkboxSize,
+      ),
+      skip: rect(
+        tasks.skipLeft,
+        boxTop,
+        tasks.skipLeft + tasks.skipSize,
+        boxTop + tasks.skipSize,
       ),
       text: rect(tasks.textLeft, top + 8, tasks.textRight, bottom - 8),
       meta: rect(tasks.metaLeft, top + 8, tasks.metaRight, bottom - 8),

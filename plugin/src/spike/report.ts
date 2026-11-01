@@ -24,21 +24,7 @@ export interface LogEntry {
   msg: string;
 }
 
-export const QUESTIONS: Array<Pick<Finding, 'id' | 'title'>> = [
-  {id: 'q1-template', title: 'Q1 Custom template image for new notebook/page'},
-  {id: 'q2-render', title: 'Q2 Render task text boxes (timing)'},
-  {id: 'q3-recognize', title: 'Q3 Read strokes + recognize per line'},
-  {id: 'q4-penup', title: 'Q4 Pen-up events while plugin UI is closed'},
-  {id: 'q5-background', title: 'Q5 Toolbar button without UI (Ping) reaches the plugin'},
-  {id: 'q6-storage', title: 'Q6 Persistent storage inside PluginHost'},
-  {id: 'net', title: 'Network: Worker reachable'},
-  {id: 'permissions', title: 'Permissions: FILE:READ / FILE:WRITE / INTERNET'},
-  {id: 'ticks', title: 'Ticks read from the task zone'},
-  {id: 'outline', title: 'Handwriting → outline nodes'},
-  {id: 'header', title: 'Update header text in place'},
-  {id: 'api', title: 'Device API methods the plugin needs'},
-  {id: 'device', title: 'Device facts'},
-];
+export const QUESTIONS: Array<Pick<Finding, 'id' | 'title'>> = [];
 
 const STORE_KEY = 'spike-report';
 const MAX_LOG = 150;

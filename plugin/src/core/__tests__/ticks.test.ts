@@ -13,6 +13,27 @@ describe('readTaskZone', () => {
     expect(marks.filter(m => m.done)).toHaveLength(1);
   });
 
+  it('treats a mark in the right-hand box as not today, not done', () => {
+    const marks = readTaskZone([tick(row(3).skip.left + 8, midY(3))], layout);
+    expect(marks[3].skip).toBe(true);
+    expect(marks[3].done).toBe(false);
+  });
+
+  it('keeps done and not-today marks of different rows apart', () => {
+    const marks = readTaskZone(
+      [tick(row(0).checkbox.left + 8, midY(0)), tick(row(1).skip.left + 8, midY(1))],
+      layout,
+    );
+    expect(marks.map(m => [m.done, m.skip])).toEqual([
+      [true, false],
+      [false, true],
+      [false, false],
+      [false, false],
+      [false, false],
+      [false, false],
+    ]);
+  });
+
   it('treats a line through the task text as done', () => {
     const strike = segment(row(2).text.left + 10, midY(2) + 4, row(2).text.left + 520, midY(2) - 6);
     const marks = readTaskZone([strike], layout);

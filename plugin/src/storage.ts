@@ -12,6 +12,7 @@ interface TanaNative {
   readFile(path: string): Promise<string | null>;
   writeFile(path: string, content: string): Promise<boolean>;
   appendFile(path: string, content: string): Promise<boolean>;
+  writeFileBase64(path: string, base64: string): Promise<number>;
 }
 
 const native: TanaNative | undefined = NativeModules.TanaNative;
@@ -37,6 +38,14 @@ export async function setJSON(key: string, value: unknown): Promise<void> {
   } else {
     memory.set(key, raw);
   }
+}
+
+/** Writes binary content (given as base64) anywhere the plugin may write, e.g. MyStyle. */
+export async function writeBinary(path: string, base64: string): Promise<number> {
+  if (!native?.writeFileBase64) {
+    throw new Error('native file module missing (TanaNative.writeFileBase64)');
+  }
+  return native.writeFileBase64(path, base64);
 }
 
 /** Native modules worth knowing about, for the spike report. */
