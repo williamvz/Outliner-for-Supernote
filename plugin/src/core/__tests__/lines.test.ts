@@ -2,7 +2,7 @@ import {computeLayout} from '../layout';
 import {indentLevel, readWritingZone} from '../lines';
 import {segment, square, word} from '../__fixtures__/strokes';
 
-const layout = computeLayout();
+const layout = computeLayout(undefined, undefined, 'notes');
 const baseline = (slot: number) =>
   layout.writingZone.top + (slot + 1) * layout.lineSpacing - 12;
 const guide = (n: number) => layout.marginLeft + n * layout.indentStep;

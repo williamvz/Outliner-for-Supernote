@@ -27,16 +27,23 @@ function workspaceTasks(ws) {
   }));
 }
 
+// Writes from the Worker (check_node, set_field_content) are remembered so the
+// next read_node shows them, like the real thing.
+const overrides = {};
+const writes = [];
+
 function readNode(id) {
   let m;
   if ((m = /-t(\d+)$/.exec(id))) {
     const i = +m[1];
     const tags = i % 13 === 0 ? '#recurring_task' : '#task';
-    const lines = [`- [ ] Task ${i} ${tags} <!-- node-id: ${id} -->`];
+    const o = overrides[id] ?? {};
+    const lines = [`- [${o.checked ? 'x' : ' '}] Task ${i} ${tags} <!-- node-id: ${id} -->`];
     const parent = i % 3 === 0 ? `[Project ${i % 4} #project](tana:proj-${i % 4})` : `[Area ${i % 8} #area](tana:area-${i % 8})`;
     lines.push(`  - **Parent area or Project**: ${parent}`);
-    const d = DEADLINES[i % DEADLINES.length];
+    const d = o.deadline ?? DEADLINES[i % DEADLINES.length];
     if (d) lines.push(`  - **Deadline Date**: ${d} <!-- node-id: d${i} -->`);
+    if (i % 13 === 0) lines.push('  - **Occurrence**: In one week');
     lines.push(`  - **Priority**: [${PRIORITIES[i % 4]}](tana:p${i % 4})`);
     return lines.join('\n') + '\n';
   }
@@ -62,6 +69,21 @@ function callTool(name, args) {
       return workspaceTasks(args.workspaceIds[0]);
     case 'read_node':
       return {markdown: readNode(args.nodeId), hasAttachments: false};
+    case 'get_tag_schema':
+      return {markdown: '# Tag definition: task\n- **Deadline Date** (id:attr-deadline):: Date\n- **Priority** (id:attr-prio):: Options\n'};
+    case 'check_node':
+      overrides[args.nodeId] = {...overrides[args.nodeId], checked: true};
+      writes.push({tool: name, args});
+      return `Checked ${args.nodeId}`;
+    case 'set_field_content':
+      overrides[args.nodeId] = {...overrides[args.nodeId], deadline: args.content};
+      writes.push({tool: name, args});
+      return `Set ${args.attributeId} on ${args.nodeId}`;
+    case 'get_or_create_calendar_node':
+      return {nodeId: `day-${args.date}`, name: args.date};
+    case 'import_tana_paste':
+      writes.push({tool: name, args});
+      return {created: args.content.split('\n').length};
     default:
       return {ok: true};
   }
@@ -70,7 +92,7 @@ function callTool(name, args) {
 http
   .createServer((req, res) => {
     if (req.url === '/stats') {
-      res.end(JSON.stringify({requests, toolCounts}));
+      res.end(JSON.stringify({requests, toolCounts, writes}));
       return;
     }
     let body = '';

@@ -47,16 +47,18 @@ def tana():
     return img
 
 
-def ping():
+def notes():
     img, d = canvas()
-    d.ellipse([14, 14, 82, 82], outline=INK, width=W)
-    d.ellipse([38, 38, 58, 58], fill=INK)
+    d.rectangle([14, 10, 82, 86], outline=INK, width=W)
+    for y in (32, 50, 68):
+        d.line([(26, y), (70, y)], fill=INK, width=5)
+    d.line([(26, 32), (26, 68)], fill=INK, width=3)
     return img
 
 
 def main():
     OUT.mkdir(parents=True, exist_ok=True)
-    for name, draw in (("today", today), ("sync", sync), ("tana", tana), ("ping", ping)):
+    for name, draw in (("today", today), ("sync", sync), ("tana", tana), ("notes", notes)):
         draw().save(OUT / f"{name}.png", optimize=True)
         print(f"wrote assets/icons/{name}.png")
     tana().resize((192, 192)).save(ROOT / "assets/icon.png", optimize=True)

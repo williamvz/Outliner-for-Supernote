@@ -75,6 +75,8 @@ export const NATIVE_METHODS = [
   'insertText',
   'recognizeElements',
   'clearElementCache',
+  'getNoteSystemTemplates',
+  'getNotePageTemplate',
 ] as const;
 
 function nativeApi(): Record<string, unknown> | null {
@@ -172,6 +174,16 @@ export const openFile = (path: string, page: number) =>
 export const reloadFile = () => call<boolean>('reloadFile', () => PluginCommAPI.reloadFile());
 export const jumpToPage = (page: number) =>
   call<boolean>('jumpToPage', () => PluginCommAPI.jumpToPage(page));
+
+export const getElementCount = (path: string, page: number) =>
+  call<number>('getElements', () => PluginFileAPI.getElements(page, path)).then(list => (list as unknown as unknown[]).length);
+
+export const noteSystemTemplates = () =>
+  call<Array<{name: string}>>('getNoteSystemTemplates', () => PluginCommAPI.getNoteSystemTemplates());
+export const notePageTemplate = (path: string, page: number) =>
+  call<{name: string; md5: string}>('getNotePageTemplate', () =>
+    PluginFileAPI.getNotePageTemplate(path, page),
+  );
 
 export const createElement = (type: number) =>
   call<Element>('createElement', () => PluginCommAPI.createElement(type));

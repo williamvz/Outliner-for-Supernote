@@ -86,6 +86,10 @@ export function dayFromBreadcrumb(breadcrumb: string[], today: string): string |
 
 const RANK: Record<string, number> = {P1: 1, P2: 2, P3: 3, P4: 4};
 
+/**
+ * Strictly by priority (P1 first; a task without one counts as P3), then the
+ * oldest deadline first, tasks without a deadline last, then by name.
+ */
 export function compareTasks(a: Task, b: Task): number {
   const pa = RANK[a.priority ?? 'P3'];
   const pb = RANK[b.priority ?? 'P3'];
@@ -115,5 +119,19 @@ export function todayView(tasks: Task[], today: string): Task[] {
         t.onDayNode === today ||
         (!t.someday && t.deadline !== null && daysBetween(t.deadline, today) >= 0),
     )
+    .sort(compareTasks);
+}
+
+export interface Filters {
+  priorities: string[];
+  domains: string[];
+}
+
+/** Every open task for the Tasks notebook: routine (🤖) and Decide: items stay out. */
+export function openTasks(tasks: Task[], filters: Filters): Task[] {
+  return tasks
+    .filter(t => !EXCLUDED_PREFIX.test(t.name.trim()))
+    .filter(t => !filters.priorities.length || filters.priorities.includes(t.priority ?? 'P3'))
+    .filter(t => !filters.domains.length || filters.domains.includes(t.domain ?? 'Unsorted'))
     .sort(compareTasks);
 }

@@ -6,7 +6,7 @@ sideloaded app with a separate canvas) is superseded: the plugin route is
 confirmed.
 
 The screens below are mockups at the Nomad's resolution (1404 × 1872), drawn
-from the same `layout.json` and template the plugin uses. Handwriting is
+from the same `pageSpec.json` and template the plugin uses. Handwriting is
 simulated with a handwriting font.
 
 ## TL;DR
@@ -224,6 +224,33 @@ These parts are unchanged from v1:
 
 ### 5.2 Rendering
 
+**Since v0.5 the page is drawn, not typed.** The plugin draws every page
+(header, task rows with a "done" box and a "Not today" box, ruled notes with
+numbered indent guides, and a SYNC box) into a PNG on the device, writes it to
+`MyStyle/tana_page.png` and makes a notebook page from it: `createNote` for the
+first page, `insertNotePage` with the image path for the next ones (the device
+accepts an image path there, though the docs only name templates). Fonts are
+pre-rasterised from Inter (`tools/make_font.py`) and the PNG is encoded in plain
+JavaScript (`src/render/`). Two notebooks per day:
+
+- **Tasks** (`Tasks <date>.note`): 14 rows a page, as many pages as it takes
+  (up to 12), P1 first. The plugin remembers which task is on which row, per
+  page, in its data directory.
+- **Notes** (`Notes <date>.note`): ruled lines with solid, numbered indent
+  guides. Tapping Notes while it is open adds a page.
+
+**The SYNC box.** The note app reports every finished pen stroke to the plugin.
+The plugin looks only at the first point of each; when it lies in the SYNC box
+of a notebook the plugin made, it opens the panel and syncs. The tap stays on
+the page as a small ink mark, which no zone reads.
+
+**Layout file.** `src/core/pageSpec.json` holds the numbers. It must not share
+a name with a code file: Metro tries `.json` before `.ts`, so `layout.json` hid
+`layout.ts` on the device and `computeLayout` was undefined (the cause of the
+"undefined is not a function" in v0.1–v0.4). A test guards it.
+
+*The text-box approach below was the v0.1 to v0.4 design, kept for reference.*
+
 - Text boxes go on the **main layer**. The SDK only allows text boxes there,
   so plugin text and your ink share a layer. They are inserted as
   **non-editable** (`textEditable: 1`) in one batch (`insertPageElements`).
@@ -359,7 +386,13 @@ For each task:
 
 - **Filters** on top of any view: Priority (P1, P2, P3, P4, multi-select) and
   Domain (Home / Work / All).
-- **Sort order:** P1 → P4, then oldest deadline first.
+- **Sort order:** strictly by priority (P1, P2, P3, P4; no priority counts as
+  P3), then the oldest due date first, tasks without a due date last, then by
+  name. An early version used a score that let very late low-priority tasks
+  climb; it was dropped, because the rule "all P1 first" is easier to trust.
+- **Not today:** a mark in the right-hand box sets the task's Deadline Date to
+  tomorrow (unless it is already later). The task drops off today's list and
+  comes back tomorrow, with its priority and lateness intact.
 - **Paging:** 6 rows on the page, 8 in the panel, with ‹ Prev / Next › and
   "2 / 6".
 
@@ -399,6 +432,14 @@ Undoing a recurring completion is manual in Tana.
 ## 7. Worker API
 
 Requests from the device send `Authorization: Bearer <device token>`.
+
+**Built in v0.5** (with the passphrase as bearer token, until pairing exists):
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /tasks?view=today` | The urgency-sorted Today list (see §6.2). |
+| `POST /sync` | `{actions:[{type:"done"\|"postpone", id}]}`. Checks the node (a recurring task gets its deadline moved forward by *Occurrence*, repeated until after today, instead of being checked), or sets Deadline Date to tomorrow. Safe to repeat. Returns a result per action. |
+| `POST /notes` | `{day, key, lines:[{level,text,isTask}]}`. Imports the lines as nodes on that day's node with `import_tana_paste`, once per `key`. |
 
 **Pairing** (§5.7), without a device token:
 

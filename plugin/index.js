@@ -8,18 +8,18 @@ import App from './App';
 import {name as appName} from './app.json';
 import {version} from './package.json';
 import {show} from './src/nav';
-import {logEvent, record, loadSaved} from './src/spike/report';
-import {runSync} from './src/spike/sync';
-import {runToday} from './src/spike/today';
-import {registerSpikeListeners} from './src/spike/listeners';
+import {logEvent, loadSaved} from './src/spike/report';
+import {runNotes} from './src/app/notes';
+import {runSync} from './src/app/sync';
+import {registerSyncTap} from './src/app/syncTap';
+import {runTasks} from './src/app/tasks';
 
-const BUTTON_TODAY = 100;
+const BUTTON_TASKS = 100;
 const BUTTON_SYNC = 101;
 const BUTTON_PANEL = 102;
-const BUTTON_PING = 103;
+const BUTTON_NOTES = 103;
 
 const TOOLBAR = 1;
-const NO_UI = 0;
 const WITH_UI = 1;
 
 const icon = asset => Image.resolveAssetSource(asset).uri;
@@ -31,12 +31,17 @@ loadSaved();
 logEvent(`plugin loaded, v${version}`);
 
 // Today and Sync open the plugin view so progress and errors are visible.
-// Ping keeps showType 0: v0.1's Today and Sync ran without a view, and Ping
-// confirms that with nothing else involved.
 PluginManager.registerButton(TOOLBAR, ['NOTE'], {
-  id: BUTTON_TODAY,
-  name: 'Today',
+  id: BUTTON_TASKS,
+  name: 'Tasks',
   icon: icon(require('./assets/icons/today.png')),
+  showType: WITH_UI,
+});
+
+PluginManager.registerButton(TOOLBAR, ['NOTE'], {
+  id: BUTTON_NOTES,
+  name: 'Notes',
+  icon: icon(require('./assets/icons/notes.png')),
   showType: WITH_UI,
 });
 
@@ -54,20 +59,17 @@ PluginManager.registerButton(TOOLBAR, ['NOTE', 'DOC'], {
   showType: WITH_UI,
 });
 
-PluginManager.registerButton(TOOLBAR, ['NOTE'], {
-  id: BUTTON_PING,
-  name: 'Ping',
-  icon: icon(require('./assets/icons/ping.png')),
-  showType: NO_UI,
-});
-
 PluginManager.registerButtonListener({
   onButtonPress(event) {
     logEvent(`button ${JSON.stringify(event)} (id is ${typeof event?.id})`);
     switch (Number(event?.id)) {
-      case BUTTON_TODAY:
+      case BUTTON_TASKS:
         show('report');
-        runToday();
+        runTasks();
+        break;
+      case BUTTON_NOTES:
+        show('report');
+        runNotes();
         break;
       case BUTTON_SYNC:
         show('report');
@@ -75,9 +77,6 @@ PluginManager.registerButtonListener({
         break;
       case BUTTON_PANEL:
         show('report');
-        break;
-      case BUTTON_PING:
-        record('q5-background', 'pass', 'Ping (showType 0) reached the plugin');
         break;
     }
   },
@@ -92,4 +91,4 @@ PluginManager.registerConfigButtonListener({
   },
 });
 
-registerSpikeListeners();
+registerSyncTap();

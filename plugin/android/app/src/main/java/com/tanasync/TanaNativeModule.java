@@ -5,6 +5,8 @@ import com.facebook.react.bridge.ReactApplicationContext;
 import com.facebook.react.bridge.ReactContextBaseJavaModule;
 import com.facebook.react.bridge.ReactMethod;
 
+import android.util.Base64;
+
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
@@ -62,6 +64,26 @@ public class TanaNativeModule extends ReactContextBaseJavaModule {
     @ReactMethod
     public void appendFile(String path, String content, Promise promise) {
         write(path, content, true, promise);
+    }
+
+    /** Writes binary content (the Today page template PNG), given as base64. */
+    @ReactMethod
+    public void writeFileBase64(String path, String base64, Promise promise) {
+        try {
+            File file = new File(path);
+            File parent = file.getParentFile();
+            if (parent != null && !parent.exists()) {
+                parent.mkdirs();
+            }
+            byte[] bytes = Base64.decode(base64, Base64.DEFAULT);
+            try (FileOutputStream out = new FileOutputStream(file, false)) {
+                out.write(bytes);
+                out.flush();
+            }
+            promise.resolve((double) bytes.length);
+        } catch (Exception e) {
+            promise.reject("write_failed", e);
+        }
     }
 
     private void write(String path, String content, boolean append, Promise promise) {

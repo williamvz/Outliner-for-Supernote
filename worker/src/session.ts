@@ -1,5 +1,6 @@
 import {DurableObject} from 'cloudflare:workers';
-import {todayIn} from './dates';
+import {addDays, todayIn} from './dates';
+import {postponedDeadline, rescheduledDeadline, tanaPaste, type NoteLine} from './actions';
 import type {Env} from './env';
 import {parseNodeMarkdown} from './markdown';
 import {McpClient, McpError, UnauthorizedError} from './mcp';
@@ -16,7 +17,7 @@ import {
   type ServerMetadata,
   type Tokens,
 } from './oauth';
-import {FIELDS, taskFromNode, todayView, type Task} from './tasks';
+import {FIELDS, openTasks, taskFromNode, todayView, type Task} from './tasks';
 
 const SNAPSHOT_MAX_AGE_MS = 10 * 60 * 1000;
 const DOMAIN_MAX_AGE_MS = 24 * 60 * 60 * 1000;
@@ -98,6 +99,12 @@ export class TanaSession extends DurableObject<Env> {
           return await this.finishOAuth(url);
         case 'GET /tasks':
           return json(await this.tasks(url));
+        case 'GET /sync/log':
+          return json((await this.ctx.storage.get('sync.log')) ?? []);
+        case 'POST /sync':
+          return json(await this.sync(await request.json()));
+        case 'POST /notes':
+          return json(await this.notes(await request.json()));
         case 'POST /spike/report':
           return json(await this.saveReport(request));
         case 'GET /spike/report':
@@ -300,7 +307,15 @@ export class TanaSession extends DurableObject<Env> {
     }
     const job = await this.ctx.storage.get<Job>(JOB_KEY);
     const view = url.searchParams.get('view') ?? 'all';
-    const list = snapshot ? (view === 'today' ? todayView(snapshot.tasks, today) : snapshot.tasks) : [];
+    const filters = {
+      priorities: (url.searchParams.get('priority') ?? '').split(',').filter(Boolean),
+      domains: (url.searchParams.get('domain') ?? '').split(',').filter(Boolean),
+    };
+    const list = snapshot
+      ? view === 'today'
+        ? todayView(snapshot.tasks, today)
+        : openTasks(snapshot.tasks, filters)
+      : [];
     return {
       generatedAt: snapshot?.generatedAt ?? null,
       today,
@@ -443,6 +458,158 @@ export class TanaSession extends DurableObject<Env> {
     return complete;
   }
 
+  // ---- Writes to Tana ----------------------------------------------------
+
+  /** The Deadline Date field's attribute id, read from the task tag's schema. */
+  private async deadlineAttribute(ws: Workspace): Promise<string> {
+    const key = `tana.deadlineAttr.${ws.taskTagId}`;
+    const cached = await this.ctx.storage.get<string>(key);
+    if (cached) {
+      return cached;
+    }
+    const schema = await this.withMcp(m =>
+      m.callTool<{markdown: string} | string>('get_tag_schema', {
+        tagId: ws.taskTagId,
+        includeEditInstructions: false,
+      }),
+    );
+    const text = typeof schema === 'string' ? schema : schema.markdown;
+    const found = new RegExp(`\\*\\*${FIELDS.deadline}\\*\\*\\s*\\(id:([^)\\s]+)\\)`).exec(text);
+    if (!found) {
+      throw new Error(`the #${this.env.TASK_TAG} tag has no "${FIELDS.deadline}" field`);
+    }
+    await this.ctx.storage.put(key, found[1]);
+    return found[1];
+  }
+
+  /**
+   * Ticks and "Not today" marks from the device. Each action is idempotent:
+   * a checked task is left alone, and a deadline already at the target
+   * stays. Results are per action, so one failure doesn't stop the rest.
+   */
+  private async sync(body: unknown) {
+    const actions = ((body as {actions?: SyncAction[]})?.actions ?? []).slice(0, 50);
+    const today = todayIn(this.env.TIMEZONE);
+    const ws = await this.workspace();
+    const results: SyncResult[] = [];
+    for (const action of actions) {
+      try {
+        results.push(await this.apply(action, today, ws));
+      } catch (e) {
+        results.push({
+          id: action.id,
+          type: action.type,
+          status: 'failed',
+          detail: e instanceof Error ? e.message : String(e),
+        });
+      }
+    }
+    await this.patchSnapshot(results, today);
+    const log = (await this.ctx.storage.get<unknown[]>('sync.log')) ?? [];
+    log.unshift({at: new Date().toISOString(), results});
+    await this.ctx.storage.put('sync.log', log.slice(0, 30));
+    return {today, results};
+  }
+
+  private async apply(action: SyncAction, today: string, ws: Workspace): Promise<SyncResult> {
+    const result = (status: SyncResult['status'], detail: string): SyncResult => ({
+      id: action.id,
+      type: action.type,
+      status,
+      detail,
+    });
+    if (!/^[A-Za-z0-9_-]{4,40}$/.test(action.id ?? '')) {
+      return result('failed', 'bad task id');
+    }
+    if (action.type !== 'done' && action.type !== 'postpone') {
+      return result('failed', `unknown action ${String((action as {type?: string}).type)}`);
+    }
+    const node = await this.readNode(action.id);
+    if (node.checked === true) {
+      return result('skipped', 'already done in Tana');
+    }
+    const task = taskFromNode(node, action.id, [], today, this.env.RECURRING_TAG);
+
+    if (action.type === 'postpone') {
+      const target = postponedDeadline(task.deadline, today);
+      if (!target) {
+        return result('skipped', `deadline ${task.deadline} is already after tomorrow`);
+      }
+      await this.setDeadline(action.id, target, ws);
+      return result('ok', `deadline → ${target}`);
+    }
+
+    if (task.recurring) {
+      const next = rescheduledDeadline(task.deadline, task.occurrence, today);
+      if (!next) {
+        return result(
+          'skipped',
+          `recurring task needs a deadline and an occurrence like "In one week" (has ${task.deadline ?? 'no deadline'}, ${task.occurrence ?? 'no occurrence'})`,
+        );
+      }
+      await this.setDeadline(action.id, next, ws);
+      return result('ok', `recurring: next deadline ${next}`);
+    }
+    await this.withMcp(m => m.callTool('check_node', {nodeId: action.id}));
+    return result('ok', 'checked');
+  }
+
+  private async setDeadline(nodeId: string, date: string, ws: Workspace): Promise<void> {
+    const attributeId = await this.deadlineAttribute(ws);
+    await this.withMcp(m =>
+      m.callTool('set_field_content', {nodeId, attributeId, content: date}),
+    );
+  }
+
+  /** Keeps the stored snapshot in step so the next /tasks call reflects the change. */
+  private async patchSnapshot(results: SyncResult[], today: string): Promise<void> {
+    const snapshot = await this.ctx.storage.get<Snapshot>(SNAPSHOT_KEY);
+    if (!snapshot) {
+      return;
+    }
+    const changed = new Map(results.filter(r => r.status === 'ok').map(r => [r.id, r]));
+    if (!changed.size) {
+      return;
+    }
+    snapshot.tasks = snapshot.tasks
+      .map(t => {
+        const r = changed.get(t.id);
+        if (!r) {
+          return t;
+        }
+        if (r.type === 'postpone') {
+          return {...t, deadline: addDays(today, 1), onDayNode: null};
+        }
+        const next = /next deadline (\d{4}-\d{2}-\d{2})/.exec(r.detail)?.[1];
+        return next ? {...t, deadline: next, onDayNode: null} : null;
+      })
+      .filter((t): t is Task => t !== null);
+    await this.ctx.storage.put(SNAPSHOT_KEY, snapshot);
+  }
+
+  /** Handwritten outline → nodes on the day node. Safe to resend: same key, one import. */
+  private async notes(body: unknown) {
+    const {day, lines, key} = body as {day?: string; lines?: NoteLine[]; key?: string};
+    const date = /^\d{4}-\d{2}-\d{2}$/.test(day ?? '') ? (day as string) : todayIn(this.env.TIMEZONE);
+    const content = tanaPaste((lines ?? []).slice(0, 200), this.env.TASK_TAG);
+    if (!content) {
+      return {day: date, imported: 0};
+    }
+    const {workspaceId} = await this.workspace();
+    const dayNode = await this.withMcp(m =>
+      m.callTool<unknown>('get_or_create_calendar_node', {workspaceId, granularity: 'day', date}),
+    );
+    const dayId = nodeIdOf(dayNode);
+    if (!dayId) {
+      throw new Error(`could not read the day node id from ${JSON.stringify(dayNode).slice(0, 200)}`);
+    }
+    const idempotencyKey = `supernote-${date}-${(key ?? '').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 60) || hash(content)}`;
+    const result = await this.withMcp(m =>
+      m.callTool<unknown>('import_tana_paste', {parentNodeId: dayId, content, idempotencyKey}),
+    );
+    return {day: date, dayId, imported: content.split('\n').length, result};
+  }
+
   // ---- Spike helpers -----------------------------------------------------
 
   private async health() {
@@ -526,6 +693,34 @@ export class TanaSession extends DurableObject<Env> {
     );
     return {day, dayId, importResult: result};
   }
+}
+
+interface SyncAction {
+  type: 'done' | 'postpone';
+  id: string;
+}
+
+interface SyncResult {
+  id: string;
+  type: string;
+  status: 'ok' | 'skipped' | 'failed';
+  detail: string;
+}
+
+function nodeIdOf(value: unknown): string | null {
+  if (typeof value === 'string') {
+    return /^[A-Za-z0-9_-]{6,}$/.test(value.trim()) ? value.trim() : /[A-Za-z0-9_-]{8,}/.exec(value)?.[0] ?? null;
+  }
+  const v = value as {nodeId?: string; id?: string} | null;
+  return v?.nodeId ?? v?.id ?? null;
+}
+
+function hash(text: string): string {
+  let h = 5381;
+  for (let i = 0; i < text.length; i++) {
+    h = ((h << 5) + h + text.charCodeAt(i)) | 0;
+  }
+  return (h >>> 0).toString(36);
 }
 
 function progress(job: Job) {

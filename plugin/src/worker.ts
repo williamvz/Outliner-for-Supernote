@@ -8,20 +8,50 @@ export interface TaskSummary {
   deadline: string | null;
   domain: string | null;
   recurring: boolean;
+  onDayNode?: string | null;
 }
 
-async function request(path: string, init: RequestInit = {}, timeoutMs = 8000) {
+export interface TasksResponse {
+  generatedAt: string | null;
+  today: string;
+  count: number;
+  refreshing: {read: number; of: number} | null;
+  tasks: TaskSummary[];
+}
+
+export interface SyncAction {
+  type: 'done' | 'postpone';
+  id: string;
+}
+
+export interface SyncResult {
+  id: string;
+  type: string;
+  status: 'ok' | 'skipped' | 'failed';
+  detail: string;
+}
+
+export interface NoteLine {
+  level: number;
+  text: string;
+  isTask?: boolean;
+}
+
+export class NetworkError extends Error {}
+
+async function request(path: string, init: RequestInit = {}, timeoutMs = 10000) {
   const {workerUrl, passphrase} = await loadConfig();
   if (!workerUrl) {
-    throw new Error('Worker URL not configured');
+    throw new Error('Worker URL not configured (Config)');
   }
   if (!(await ensurePermission(PERMISSIONS.internet, 'Talk to your Tana sync server'))) {
     throw new Error('INTERNET permission not granted');
   }
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let res: Response;
   try {
-    const res = await fetch(`${workerUrl}${path}`, {
+    res = await fetch(`${workerUrl}${path}`, {
       ...init,
       signal: controller.signal,
       headers: {
@@ -30,21 +60,42 @@ async function request(path: string, init: RequestInit = {}, timeoutMs = 8000) {
         ...(init.headers ?? {}),
       },
     });
-    if (!res.ok) {
-      throw new Error(`${path} → HTTP ${res.status}`);
-    }
-    return res.json();
+  } catch (e) {
+    throw new NetworkError(`${path}: ${e instanceof Error ? e.message : String(e)}`);
   } finally {
     clearTimeout(timer);
   }
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`${path} → HTTP ${res.status} ${text.slice(0, 160)}`);
+  }
+  return res.json();
 }
 
-export const health = () => request('/health') as Promise<{ok: boolean; tana: string}>;
+export const health = () => request('/health') as Promise<{ok: boolean; tana: string; workspace: string | null}>;
 
-export async function todayTasks(): Promise<TaskSummary[]> {
-  const body = (await request('/tasks?view=today', {}, 15000)) as {tasks: TaskSummary[]};
-  return body.tasks;
-}
+export const getTasks = (filters: {priorities: string[]; domains: string[]} = {priorities: [], domains: []}) => {
+  const query = [
+    'view=all',
+    filters.priorities.length ? `priority=${filters.priorities.join(',')}` : '',
+    filters.domains.length ? `domain=${filters.domains.join(',')}` : '',
+  ]
+    .filter(Boolean)
+    .join('&');
+  return request(`/tasks?${query}`, {}, 15000) as Promise<TasksResponse>;
+};
+
+export const postSync = (actions: SyncAction[]) =>
+  request('/sync', {method: 'POST', body: JSON.stringify({actions})}, 30000) as Promise<{
+    today: string;
+    results: SyncResult[];
+  }>;
+
+export const postNotes = (day: string, key: string, lines: NoteLine[]) =>
+  request('/notes', {method: 'POST', body: JSON.stringify({day, key, lines})}, 30000) as Promise<{
+    day: string;
+    imported: number;
+  }>;
 
 export const sendReport = (report: unknown) =>
   request('/spike/report', {method: 'POST', body: JSON.stringify(report)});

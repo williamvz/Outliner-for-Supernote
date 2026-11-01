@@ -1,3 +1,4 @@
+/* eslint-disable no-bitwise, curly */
 import type {Point, StrokeShape} from '../geometry';
 
 let counter = 0;
